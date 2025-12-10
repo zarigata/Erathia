@@ -12,7 +12,17 @@ func _setup_inputs():
 		"move_right": [KEY_D, KEY_RIGHT],
 		"jump": [KEY_SPACE],
 		"sprint": [KEY_SHIFT],
-		"pause": [KEY_ESCAPE]
+		"pause": [KEY_ESCAPE],
+		"interact": [KEY_E],
+		"equip_1": [KEY_1],
+		"equip_2": [KEY_2],
+		"equip_3": [KEY_3],
+		"toggle_console": [KEY_QUOTELEFT]  # Backtick/Tilde key
+	}
+
+	var mouse_inputs = {
+		"attack": [MOUSE_BUTTON_LEFT],
+		"use": [MOUSE_BUTTON_RIGHT]
 	}
 	
 	# Joypad Button Inputs
@@ -25,6 +35,9 @@ func _setup_inputs():
 	# 1. Clear and Add Actions
 	var all_actions = key_inputs.keys()
 	for a in joy_inputs:
+		if not a in all_actions:
+			all_actions.append(a)
+	for a in mouse_inputs:
 		if not a in all_actions:
 			all_actions.append(a)
 			
@@ -44,6 +57,13 @@ func _setup_inputs():
 	for action in joy_inputs:
 		for b in joy_inputs[action]:
 			var ev = InputEventJoypadButton.new()
+			ev.button_index = b
+			InputMap.action_add_event(action, ev)
+
+	# 5. Add Mouse Buttons
+	for action in mouse_inputs:
+		for b in mouse_inputs[action]:
+			var ev = InputEventMouseButton.new()
 			ev.button_index = b
 			InputMap.action_add_event(action, ev)
 			

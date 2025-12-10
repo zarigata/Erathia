@@ -94,7 +94,40 @@ func _process_command(cmd: String):
 				_log("Weather set to: " + state)
 			else:
 				_log("Error: WeatherManager not found.")
+		"time":
+			var cycle = get_tree().root.find_child("DirectionalLight3D", true, false)
+			if not cycle or not cycle.has_method("_update_sun_position"):
+				_log("Error: DayNightCycle not found.")
+				return
+
+			if parts.size() < 2:
+				_log("Usage: time [set|scale|real] [value]")
+				return
+				
+			var sub = parts[1]
+			match sub:
+				"set":
+					if parts.size() < 3:
+						_log("Usage: time set <hour 0-24>")
+						return
+					var hour = float(parts[2])
+					cycle.use_real_time = false
+					cycle.current_time = hour * 3600.0
+					_log("Time set to hour: " + str(hour))
+				"scale":
+					if parts.size() < 3:
+						_log("Usage: time scale <multiplier>")
+						return
+					var s = float(parts[2])
+					cycle.use_real_time = false
+					cycle.time_scale = s
+					_log("Time scale set to: " + str(s))
+				"real":
+					cycle.use_real_time = not cycle.use_real_time
+					_log("Real-time sync: " + str(cycle.use_real_time))
+				_:
+					_log("Unknown time command.")
 		"help":
-			_log("Commands: fly, noclip, respawn, xray, weather [clear/rain/snow]")
+			_log("Commands: fly, noclip, respawn, xray, weather [...], time [set/scale/real]")
 		_:
 			_log("Unknown command: " + command)

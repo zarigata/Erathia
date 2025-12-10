@@ -46,3 +46,19 @@ func _spawn_chunk(pos: Vector2i):
 	chunk.global_position = Vector3(pos.x * CHUNK_SIZE, 0, pos.y * CHUNK_SIZE)
 	chunk.generate_chunk()
 	chunks[pos] = chunk
+
+func modify_terrain(global_pos: Vector3, amount: float):
+	var chunk_x = int(floor(global_pos.x / CHUNK_SIZE))
+	var chunk_z = int(floor(global_pos.z / CHUNK_SIZE))
+	var chunk_pos = Vector2i(chunk_x, chunk_z)
+	
+	if chunks.has(chunk_pos):
+		var chunk = chunks[chunk_pos]
+		# Calculate local within chunk
+		# Careful with negative coordinates floor
+		var local_x = int(floor(global_pos.x)) - (chunk_x * CHUNK_SIZE)
+		var local_z = int(floor(global_pos.z)) - (chunk_z * CHUNK_SIZE)
+		
+		# Clamp to chunk bounds (0 to CHUNK_SIZE-1) interactions
+		if local_x >= 0 and local_x < CHUNK_SIZE and local_z >= 0 and local_z < CHUNK_SIZE:
+			chunk.modify_height(local_x, local_z, amount)

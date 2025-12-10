@@ -1,0 +1,27 @@
+[gd_scene load_steps=5 format=3 uid="uid://test_cube_scene"]
+
+[ext_resource type="Script" path="res://_core/interaction/interactable.gd" id="1_interact"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_cube"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_red"]
+albedo_color = Color(1, 0, 0, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cube"]
+size = Vector3(1, 1, 1)
+
+[node name="TestCube" type="StaticBody3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -5)
+collision_layer = 3
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_cube")
+surface_material_override/0 = SubResource("StandardMaterial3D_red")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_cube")
+
+[node name="Interactable" type="Node3D" parent="."]
+script = ExtResource("1_interact")
+prompt_text = "Test Cube"

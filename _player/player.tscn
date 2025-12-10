@@ -1,15 +1,31 @@
-[gd_scene load_steps=3 format=3 uid="uid://c7175ielkgus4"]
+[gd_scene load_steps=5 format=3 uid="uid://c7175ielkgus4"]
 
-[ext_resource type="Script" uid="uid://d2ruv4nog5su2" path="res://_player/player.gd" id="1_gpcl6"]
+[ext_resource type="Script" uid="uid://d2ruv4nog5su2" path="res://_player/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://_core/interaction/player_interaction.gd" id="2_interact"]
+[ext_resource type="Script" path="res://_player/player_mining.gd" id="3_mining"]
+[ext_resource type="Script" path="res://_player/tool_holder.gd" id="4_toolholder"]
 
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_gpcl6"]
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 height = 1.8
 
 [node name="Player" type="CharacterBody3D"]
-script = ExtResource("1_gpcl6")
+script = ExtResource("1_player")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 
+[node name="ToolHolder" type="Node3D" parent="Camera3D"]
+script = ExtResource("4_toolholder")
+
+[node name="PlayerInteraction" type="RayCast3D" parent="Camera3D"]
+target_position = Vector3(0, 0, -3)
+collision_mask = 2
+script = ExtResource("2_interact")
+
+[node name="PlayerMining" type="RayCast3D" parent="Camera3D"]
+target_position = Vector3(0, 0, -5)
+collision_mask = 1
+script = ExtResource("3_mining")
+
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-shape = SubResource("CapsuleShape3D_gpcl6")
+shape = SubResource("CapsuleShape3D_player")

@@ -8,6 +8,8 @@
 [ext_resource type="PackedScene" uid="uid://c8q4j2y5x7z1" path="res://_ui/debug/debug_console.tscn" id="6_debug"]
 [ext_resource type="PackedScene" uid="uid://weather_mgr_scene" path="res://_world/weather/weather_manager.tscn" id="7_weather"]
 [ext_resource type="Material" uid="uid://sky_shader_mat" path="res://_assets/shaders/sky_material.tres" id="8_skymat"]
+[ext_resource type="PackedScene" uid="uid://crosshair_scene" path="res://_ui/hud/crosshair.tscn" id="9_crosshair"]
+[ext_resource type="PackedScene" uid="uid://test_cube_scene" path="res://_world/test_cube.tscn" id="10_cube"]
 [ext_resource type="Script" path="res://_world/day_night_cycle.gd" id="9_cycle"]
 
 [sub_resource type="Sky" id="Sky_procedural"]
@@ -34,6 +36,9 @@ script = ExtResource("1_3tbxw")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
 script = ExtResource("3_bqqt8")
 
+[node name="TestCube" parent="." instance=ExtResource("10_cube")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 50, 5)
+
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.70710677, -0.49999997, 0.49999997, 0, 0.70710677, 0.70710677, -0.70710677, -0.49999997, 0.49999997, 0, 0, 0)
@@ -44,6 +49,8 @@ script = ExtResource("9_cycle")
 environment = SubResource("Environment_ws5ob")
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="Crosshair" parent="CanvasLayer" instance=ExtResource("9_crosshair")]
 
 [node name="PauseMenu" type="Control" parent="CanvasLayer" instance=ExtResource("4_8qpgq")]
 layout_mode = 3
