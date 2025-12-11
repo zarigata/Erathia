@@ -177,6 +177,45 @@ func _physics_process(delta):
 			
 			var fish = get_node_or_null("Fish3D")
 			if fish: fish.emitting = is_swimming
+			
+			# Dynamic Vison (Speed Effect)
+			var blue_tint = underwater_effect.get_node("BlueTint")
+			if blue_tint and blue_tint.material is ShaderMaterial:
+				var mat = blue_tint.material as ShaderMaterial
+				
+				var speed_ratio = 0.0
+				if velocity.length() > 0.1:
+					speed_ratio = clamp(velocity.length() / SWIM_SPEED, 0.0, 1.0)
+					if Input.is_action_pressed("sprint"): # Allow overdriving for sprint
+						speed_ratio = clamp(velocity.length() / (SWIM_SPEED * 1.5), 0.0, 1.2)
+				
+				# Lerp values based on speed
+				# Vignette: 0.4 -> 0.7 (Darker edges)
+				# Wobble Amount: 0.05 -> 0.02 (Less wobble when fast? Or more? "Recalls vision" might mean tunnel. Let's do More wobble frequency but tighter.)
+				# Be creative: Fast = High Aberration + High Vignette
+				
+				var target_vignette = lerp(0.4, 0.85, speed_ratio)
+				var target_aberration = lerp(0.0, 2.5, speed_ratio)
+				var target_speed = lerp(2.0, 6.0, speed_ratio)
+				var target_amount = lerp(1.0, 3.0, speed_ratio) # Wobble strength increases with speed
+				
+				# Smooth transition
+				var current_vignette = mat.get_shader_parameter("vignete_intensity")
+				if current_vignette == null: current_vignette = 0.4
+				
+				var current_aberration = mat.get_shader_parameter("aberration")
+				if current_aberration == null: current_aberration = 0.0
+				
+				var current_speed = mat.get_shader_parameter("speed")
+				if current_speed == null: current_speed = 2.0
+				
+				var current_amount = mat.get_shader_parameter("amount")
+				if current_amount == null: current_amount = 1.0
+				
+				mat.set_shader_parameter("vignete_intensity", lerp(float(current_vignette), target_vignette, delta * 5.0))
+				mat.set_shader_parameter("aberration", lerp(float(current_aberration), target_aberration, delta * 5.0))
+				mat.set_shader_parameter("speed", lerp(float(current_speed), target_speed, delta * 2.0))
+				mat.set_shader_parameter("amount", lerp(float(current_amount), target_amount, delta * 5.0))
 		
 		# Oxygen logic
 		if is_swimming:

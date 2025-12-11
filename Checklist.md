@@ -99,11 +99,13 @@
 ### 2.3 Faction-Biome Ownership
 
 - [ ] Create `_world/factions/faction_data.gd`:
-  - [ ] Define factions: Sandborn, Marshfolk, Frostkin, etc.
+  - [ ] Define HoMM3 factions:
+    - [ ] Castle, Rampart, Tower, Inferno, Necropolis, Dungeon, Stronghold, Fortress.
   - [ ] For each faction:
-    - [ ] Allowed biomes.
+    - [ ] Allowed biomes (e.g., Rampart → Forest, Necropolis → Deadlands).
     - [ ] Color, banner, architecture kit.
     - [ ] Personality (for LLM).
+    - [ ] **Affinity Tools:** Specific clothes/wands that grant power in their biome.
 - [ ] Create `_world/factions/faction_manager.gd`:
   - [ ] Scan biome map for candidate region centers.
   - [ ] For each faction:
@@ -114,13 +116,29 @@
   - [ ] Factions **never own tiles outside their allowed biome list**.
   - [ ] Some biome regions remain unclaimed → player playground.
 
-### 2.4 Non-Radial Difficulty System
+### 2.4 Dynamic Difficulty & Affinity System
+
+### 2.4 Dynamic Difficulty & Affinity (Faction Interactions)
 
 - [ ] Create `_world/difficulty_manager.gd`:
-  - [ ] Read biome danger rating.
-  - [ ] Read local faction power level.
-  - [ ] Read active events (raid, boss, festival).
-  - [ ] Compute difficulty score.
+  - [ ] **Player Level Scaling:** Enemy power = `BasePower * (1.0 + PlayerLevel * 0.1)`.
+  - [ ] **Magic/Biome Zones:** Implement `get_environmental_modifier(global_pos, unit_faction)`.
+  - [ ] **Faction Interaction Implementations:**
+    - [ ] **Castle vs Inferno:**
+      - [ ] Plains: Castle Units regen HP/Morale.
+      - [ ] Lava/Volcanic: Inferno speed buff; Castle units take "Terror" (reduced AIM).
+      - [ ] *Holy Light* vs *Sulfur Fumes* area effects.
+    - [ ] **Rampart vs Necropolis:**
+      - [ ] Forest: Nature spells +50% power; Undead take DOT.
+      - [ ] Deadlands: No healing; Necromancy spells +50% power.
+    - [ ] **Tower vs Dungeon:**
+      - [ ] High Peaks: Air magic cheap; Projectile range +50%.
+      - [ ] Deep Caves: Earth/Dark magic amp; Tower units blinded (Accuracy -50%).
+    - [ ] **Stronghold vs Fortress:**
+      - [ ] Badlands: Magic cost double; Melee damage +50%.
+      - [ ] Swamp: Poison clouds (DOT); Stronghold units slowed by 50%.
+  - [ ] **Affinity Tools:**
+    - [ ] Implement `check_tool_affinity(player_equipped_items)` to mitigate penalties (e.g., Gas Mask in Swamp).
 - [ ] Hook difficulty to:
   - [ ] Enemy spawn tables (HP, levels, group sizes).
   - [ ] Loot quality.
@@ -171,6 +189,24 @@
 
 ---
 
+---
+
+## PHASE 4.5 — CRAFTING & TECH TREE
+
+- [ ] Create `_rpg/crafting_system.gd`:
+  - [ ] **Tier 0 (Hand):** Simple dictionary {Input: [Wood, Stone], Output: Torch}.
+  - [ ] **Tier 1 (Workbench):** UI Window. Requires station. Unlocks Iron tools/Leather.
+  - [ ] **Tier 2 (Arcane Forge):** Output depends on `Arcana` skill. Unlocks Steel/Silver.
+  - [ ] **Tier 3 (Faction Union Station):**
+    - [ ] Global station (one per map or very expensive).
+    - [ ] **Slots:** 2 Input Components + 1 "Faction Core".
+    - [ ] **Logic:** `if core == 'NECRO': output.add_enchant('VAMPIRISM')`.
+- [ ] Create `_rpg/recipes_db.gd`:
+  - [ ] JSON/Dictionary of all recipes.
+  - [ ] Validation: Check player inventory remove items -> add result.
+
+---
+
 ## PHASE 5 — BUILDING SYSTEM
 
 - [ ] Implement `BuildSystem.gd`:
@@ -197,6 +233,21 @@
   - [ ] Tracks houses, jobs, population, prosperity.
   - [ ] Handles NPC attraction based on:
     - [ ] Available beds, food, security, player reputation.
+
+### 6.2 Deep Reputation & Diplomacy
+
+- [ ] Create `_world/reputation_manager.gd`:
+  - [ ] Dictionary: `{FactionName: Value (0-100)}`.
+  - [ ] Methods: `modify_reputation(faction, amount)`, `get_standing(faction)`.
+  - [ ] **Consequences:**
+    - [ ] < 20: **Attack on Sight**. Spawns "Assassin" squads periodically.
+    - [ ] 20-40: **Cold**. Prices +50%. NPCs refuse talk.
+    - [ ] > 80: **Exalted**.
+      - [ ] Prices -20%.
+      - [ ] **Unlock:** Gift "Faction Core" (Recipe Item).
+- [ ] Implement Balancing Logic:
+  - [ ] "Double Agent" checks: Doing a visible quest for A lowers B slightly (-5).
+  - [ ] "Stealth Ops": Helping A without B knowing (0 penalty).
 
 ### 6.2 NPC Jobs & Simulation
 

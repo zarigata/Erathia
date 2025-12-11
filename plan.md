@@ -146,6 +146,26 @@ res://
 | **Raise/Lower** | Area brush with cost (stamina, mana, or building resource) |
 
 ---
+#### 3.2 Tiered Crafting System & Tech Tree (Phase 4.5)
+
+Crafting progresses from basic survival to high-fantasy faction technology. The highest tier allows mixing powerful Faction Magic.
+
+| **Tier** | **Station** | **Requirements** | **Capabilities** |
+| :--- | :--- | :--- | :--- |
+| **Tier 0** | **Hand / Pocket** | None | Survival Basics: Torch, Rope, Rough Axe (Stone), Bandages. |
+| **Tier 1** | **Workbench** | Wood, Iron Ingots, Leather | Standard Operations: Iron Tools, Leather Armor, Furniture, Chests. |
+| **Tier 2** | **Arcane Forge** | Steel, Silver, Gems | Advanced Gear: Steel Plate, Silver Weapons (Anti-monster), Magic Staves. |
+| **Tier 3** | **Union Station** | **Faction Cores** (see below) | **Global/Ultimate:** Faction-specific "Super Items". Requires *Faction Cores*. |
+
+> [!IMPORTANT]
+> **The Union Station (Super Crafting Table):**
+> This is a unique, global late-game station.
+> *   **Mechanic:** It has slots for **Faction Cores**.
+> *   **Unlocking Cores:** You gain a Faction's Core only by reaching **"Exalted"** status dealing with them.
+> *   **Power-Ups:** Inserting a *Necropolis Core* allows crafting generic items with *Vampirism*. Inserting an *Inferno Core* allows crafting *Magma Boots*. Inserting BOTH allows crafting a *Vampiric Flame Sword*.
+
+---
+
 
 #### Core Systems:
 
@@ -229,13 +249,18 @@ BEACH, DEEP_OCEAN, ICE_SPIRES, VOLCANIC, MUSHROOM
 - For each chunk, compute biome according to noise + altitude
 
 ##### Step 2: Faction Suitability Pass
-Each faction has a list of allowed biomes:
+Each faction has a list of allowed biomes (Based on HoMM3 Archetypes):
 
-| Faction | Allowed Biomes |
-|---------|----------------|
-| **Marshfolk** | SWAMP, RIVER_SWAMP |
-| **Sandborn** | DESERT, SAVANNA |
-| **Frostkin** | TUNDRA, ICE_SPIRES |
+| Faction | Allowed Biomes | Notes |
+|---------|----------------|-------|
+| **Castle** (Humans/Angels) | PLAINS, MEADOWS, COAST | Classic medieval kingdom vibe. |
+| **Rampart** (Elves/Dragons) | FOREST, ROLLING_HILLS | Mortal enemy of Necropolis. |
+| **Tower** (Mages/Titans) | MOUNTAIN (Snowy), ICE_SPIRES | High altitude, snowy peaks. |
+| **Inferno** (Demons) | VOLCANIC, ASHLANDS | Hellscapes. |
+| **Necropolis** (Undead) | DEADLANDS, CURSED_WASTELANDS | No magic works here; Undead amplified. |
+| **Dungeon** (Warlocks) | DEEP_CAVES, MUSHROOM_CRYSTAL | Subterranean biomes. |
+| **Stronghold** (Barbarians) | SAVANNA, BADLANDS, ROCKY_CRAGS | Rough terrain, primitive strength. |
+| **Fortress** (Beastmasters) | SWAMP, JUNGLE | Dense, wet, defensive terrain. |
 
 Candidate "region centers" (towns, villages, castles) are chosen based on:
 - Flatness / proximity to water
@@ -254,13 +279,63 @@ When a region is selected for a faction:
   - Weaker or "untamed" monsters
   - More opportunity for player settlement
 
----
+### 2.4 Deep Reputation & Diplomacy
 
-### 2.4 Difficulty Model (Non-radial)
+> [!NOTE]
+> Reputation is **Non-Exclusive**. You can befriend multiple factions if you play your cards right ("Double Agent").
+
+#### 1. Independent Tracks (0–100)
+Every faction has its own 0-100 meter for the player.
+*   **0-20 (Hostile):** Kill on Sight. Gates closed. No quests.
+*   **20-40 (Cold):** Tolerated. Allowed in outer villages. High prices.
+*   **40-60 (Neutral):** Standard access. Normal trade. Basic quests.
+*   **60-80 (Friendly):** Access to inner keeps. Better prices. Military support.
+*   **80-100 (Exalted):** **Grant Faction Core** (for Crafting). Can command local armies.
+
+#### 2. Balancing Act (The "Diplomat" Game)
+*   **Cross-Faction Quests:** Some quests help Faction A without hurting Faction B (e.g., "Kill neutral monsters threatening the border").
+*   **Secret Ops:** Stealth missions to help a faction without being seen (preserves rep with the victim).
+*   **Consequences:** If Rep drops below 10, they send assassins. If Rep is >80, they send gifts/resources daily.
+
+### 2.4 Dynamic Difficulty & Affinity System
+
+> [!NOTE]
+> Difficulty is dynamically calculated based on **Player Level**, **Faction Affinity**, and **Biome Rules**.
 
 ```
-Difficulty = BiomeDanger × FactionPower × LocalEvents
+Difficulty = (BiomeDanger + PlayerLevelScaling) × FactionHostility × MagicZoneModifier
 ```
+
+#### 1. Player Level & Progression
+- Difficulty scales with the player's level.
+- Higher level players trigger tougher enemy spawns and smarter AI.
+
+#### 2. Faction Affinity (Tools & Equipment)
+- **Tools determine power:** Some magic/tools are exclusive to certain factions.
+- **Affinity:** Player's equipment (clothes, wands, weapons) affects their power in specific biomes.
+  - *Example:* Using Nature magic items in a Necropolis zone is ineffective.
+
+#### 3. Biome-Faction Interaction Matrix (The "Zone" System)
+
+Every biome has **Intrinsic properties** that buff its native faction and strictly punish its **Rival Faction**. Magic rules change drastically per zone.
+
+| **Faction Pair** | **Native Faction vs Rival** | **Biome A (Home)** | **Biome B (Rival Home)** | **Magic/Environmental Rule** |
+| :--- | :--- | :--- | :--- | :--- |
+| **Castle vs Inferno** | **Castle** (Angels) vs **Inferno** (Demons) | **PLAINS/GRASS** | **VOLCANIC/ASHLANDS** | **Sacred Ground vs Hellscape**<br>• *Holy Light:* Castle units regen HP/Morale in Plains. Demons take DOT (Smite).<br>• *Sulfur Fumes:* Inferno units move fast in Lava. Castle units suffer Stamina drain & "Terror" debuff. |
+| **Rampart vs Necropolis** | **Rampart** (Elves) vs **Necropolis** (Undead) | **FOREST/GROVE** | **DEADLANDS** | **Life vs Anti-Life**<br>• *Life Force:* Nature magic amp. Undead decay (take damage) simply by standing on grass.<br>• *Void Zone:* No normal magic regen. Necromancy is 200% effective. Living units cannot heal. |
+| **Tower vs Dungeon** | **Tower** (Mages) vs **Dungeon** (Warlocks) | **SNOW/PEAKS** | **DEEP_CAVES** | **Altitude vs Depths**<br>• *Thin Air:* Air Magic cost -50%. Projectiles fly further. Dungeon units (dark-dwellers) blinded by sun glare.<br>• *Echoing Dark:* Earth/Dark magic amp. Tower units (rely on sight) suffer 50% Range/Accuracy penalty. |
+| **Stronghold vs Fortress** | **Stronghold** (Orcs) vs **Fortress** (Lizardmen) | **ROUGH/BADLANDS** | **SWAMP/JUNGLE** | **Might vs Disease**<br>• *Anti-Magic Field:* Magic costs 200% Mana. Physical Strength +50%. Fortress units (reliant on defense) have Armor stripped.<br>• *Plague Bog:* Disease clouds. Fortress units invisible in fog. Stronghold units sink (Move Spd -50%). |
+
+> [!IMPORTANT]
+> **Exclusive Tools & Affinity:**
+> *   **Angel Wings (Castle):** Fly over lava (Inferno).
+> *   **Elven Cloak (Rampart):** Invisible in Forest.
+> *   **Shackles of War (Stronghold):** Prevents enemy retreat; suppresses all Magic in radius.
+> *   **Gas Mask / Plague Doctor Set (Neutral/Tower):** Required to survive in Necropolis/Swamp for long periods.
+> *   **Magma Boots (Inferno):** Walk on Lava.
+
+> [!TIP]
+> **Tactical Layer:** You must drag a Necropolis army *into* the Forest to weaken them, or lure Elves *into* the Deadlands to crush them.
 
 #### BiomeDanger (0.5–4.0):
 
