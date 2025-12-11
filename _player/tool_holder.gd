@@ -5,13 +5,14 @@ extends Node3D
 
 signal tool_changed(tool_type: int)
 
-enum ToolType { HAND, PICKAXE, SHOVEL }
+enum HeldTool { HAND, PICKAXE, SHOVEL, HOE }
 
-@export var current_tool: ToolType = ToolType.HAND
+@export var current_tool: HeldTool = HeldTool.HAND
 
 # Tool mesh instances
 var pickaxe_mesh: MeshInstance3D
 var shovel_mesh: MeshInstance3D
+var hoe_mesh: MeshInstance3D
 var current_mesh: MeshInstance3D
 
 # Animation state
@@ -26,11 +27,11 @@ func _ready():
 func _process(delta):
 	# Handle tool switching
 	if Input.is_action_just_pressed("equip_1"):
-		equip_tool(ToolType.PICKAXE)
+		equip_tool(HeldTool.PICKAXE)
 	elif Input.is_action_just_pressed("equip_2"):
-		equip_tool(ToolType.SHOVEL)
+		equip_tool(HeldTool.SHOVEL)
 	elif Input.is_action_just_pressed("equip_3"):
-		equip_tool(ToolType.HAND)
+		equip_tool(HeldTool.HOE)
 	
 	# Handle swing animation
 	if is_swinging:
@@ -47,7 +48,7 @@ func _process(delta):
 		is_swinging = true
 		swing_progress = 0.0
 
-func equip_tool(tool_type: ToolType):
+func equip_tool(tool_type: HeldTool):
 	if current_tool == tool_type:
 		return
 	current_tool = tool_type
@@ -60,14 +61,18 @@ func _update_visible_tool():
 		pickaxe_mesh.visible = false
 	if shovel_mesh:
 		shovel_mesh.visible = false
+	if hoe_mesh:
+		hoe_mesh.visible = false
 	
 	# Show current
 	match current_tool:
-		ToolType.PICKAXE:
+		HeldTool.PICKAXE:
 			current_mesh = pickaxe_mesh
-		ToolType.SHOVEL:
+		HeldTool.SHOVEL:
 			current_mesh = shovel_mesh
-		ToolType.HAND:
+		HeldTool.HOE:
+			current_mesh = hoe_mesh
+		HeldTool.HAND:
 			current_mesh = null
 	
 	if current_mesh:
@@ -83,6 +88,11 @@ func _create_tool_meshes():
 	shovel_mesh = _create_shovel()
 	shovel_mesh.visible = false
 	add_child(shovel_mesh)
+
+	# Create hoe
+	hoe_mesh = _create_hoe()
+	hoe_mesh.visible = false
+	add_child(hoe_mesh)
 
 func _create_pickaxe() -> MeshInstance3D:
 	var holder = MeshInstance3D.new()
@@ -137,6 +147,37 @@ func _create_pickaxe() -> MeshInstance3D:
 	right_point.rotation_degrees = Vector3(0, 0, -90)
 	right_point.material_override = head_mat
 	holder.add_child(right_point)
+	
+	return holder
+
+func _create_hoe() -> MeshInstance3D:
+	var holder = MeshInstance3D.new()
+	holder.position = Vector3(0.3, -0.2, -0.5)
+	holder.rotation_degrees = Vector3(0, -15, -30)
+	
+	# Handle
+	var handle_mesh = CylinderMesh.new()
+	handle_mesh.top_radius = 0.02
+	handle_mesh.bottom_radius = 0.02
+	handle_mesh.height = 0.8
+	var handle = MeshInstance3D.new()
+	handle.mesh = handle_mesh
+	handle.position = Vector3(0, -0.4, 0)
+	var handle_mat = StandardMaterial3D.new()
+	handle_mat.albedo_color = Color(0.5, 0.35, 0.2)
+	handle.material_override = handle_mat
+	holder.add_child(handle)
+	
+	# Blade (Perpendicular)
+	var blade_mesh = BoxMesh.new()
+	blade_mesh.size = Vector3(0.2, 0.05, 0.02)
+	var blade = MeshInstance3D.new()
+	blade.mesh = blade_mesh
+	blade.position = Vector3(0, 0, 0)
+	var blade_mat = StandardMaterial3D.new()
+	blade_mat.albedo_color = Color(0.4, 0.4, 0.4)
+	blade.material_override = blade_mat
+	holder.add_child(blade)
 	
 	return holder
 

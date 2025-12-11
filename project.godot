@@ -19,12 +19,13 @@ config/icon="res://icon.svg"
 
 GDAIMCPRuntime="*res://addons/gdai-mcp-plugin-godot/gdai_mcp_runtime.gd"
 InputSetup="*res://_core/input_setup.gd"
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/gdai-mcp-plugin-godot/plugin.cfg")
+InventoryManager="*res://_gameplay/inventory/inventory_manager.gd"
 
 [display]
 
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gdai-mcp-plugin-godot/plugin.cfg")

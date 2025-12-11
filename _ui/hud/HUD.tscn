@@ -1,0 +1,44 @@
+[gd_scene load_steps=2 format=3 uid="uid://b0m45reg7qgnu"]
+
+[ext_resource type="Script" uid="uid://bxim3hjs2m1i5" path="res://_ui/hud/hud.gd" id="1_g7ury"]
+
+[node name="HUD" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_g7ury")
+
+[node name="Hotbar" type="HBoxContainer" parent="."]
+layout_mode = 0
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+
+[node name="Status" type="VBoxContainer" parent="."]
+custom_minimum_size = Vector2(200, 80)
+layout_mode = 0
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -100.0
+offset_right = 220.0
+offset_bottom = -20.0
+
+[node name="Health" type="ProgressBar" parent="Status"]
+custom_minimum_size = Vector2(180, 20)
+layout_mode = 2
+value = 75.0
+
+[node name="Stamina" type="ProgressBar" parent="Status"]
+custom_minimum_size = Vector2(180, 20)
+layout_mode = 2
+value = 100.0
+
+[node name="Magic" type="ProgressBar" parent="Status"]
+custom_minimum_size = Vector2(180, 20)
+layout_mode = 2
+value = 50.0

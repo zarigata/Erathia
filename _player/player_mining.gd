@@ -108,7 +108,11 @@ func _handle_primary_action():
 		if mat_id != MiningSystem.MaterialID.AIR:
 			var loot = MiningSystem.get_loot_item(mat_id)
 			if loot != "":
-				print("Mined: " + loot)
+				var remainder = InventoryManager.add_item(loot, 1)
+				if remainder == 0:
+					print("Mined & Collected: " + loot)
+				else:
+					print("Inventory Full! Could not collect: " + loot)
 
 func _handle_secondary_action():
 	if not terrain_manager: return

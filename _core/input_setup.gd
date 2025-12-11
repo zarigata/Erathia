@@ -14,6 +14,7 @@ func _setup_inputs():
 		"sprint": [KEY_SHIFT],
 		"pause": [KEY_ESCAPE],
 		"interact": [KEY_E],
+		"inventory": [KEY_TAB],
 		"equip_1": [KEY_1],
 		"equip_2": [KEY_2],
 		"equip_3": [KEY_3],

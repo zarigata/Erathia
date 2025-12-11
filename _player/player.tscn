@@ -1,11 +1,16 @@
-[gd_scene load_steps=8 format=3 uid="uid://c7175ielkgus4"]
+[gd_scene load_steps=13 format=3 uid="uid://c7175ielkgus4"]
 
 [ext_resource type="Script" uid="uid://d2ruv4nog5su2" path="res://_player/player.gd" id="1_player"]
 [ext_resource type="Script" uid="uid://bsr7csbkk8kw4" path="res://_core/interaction/player_interaction.gd" id="2_interact"]
 [ext_resource type="Script" uid="uid://c8lnmgxmdlebm" path="res://_player/player_mining.gd" id="3_mining"]
 [ext_resource type="Script" uid="uid://btjt65j5hs1y7" path="res://_player/tool_holder.gd" id="4_toolholder"]
+[ext_resource type="Script" path="res://_ui/ui_controller.gd" id="5_0rjk4"]
 [ext_resource type="PackedScene" uid="uid://x5ph3ptlj0fk" path="res://_ui/debug_overlay.tscn" id="5_7ws7n"]
 [ext_resource type="Script" uid="uid://7fncabgks8wv" path="res://_ui/debug_overlay.gd" id="6_mon3u"]
+[ext_resource type="PackedScene" uid="uid://b0m45reg7qgnu" path="res://_ui/hud/HUD.tscn" id="7_mrmit"]
+[ext_resource type="Script" uid="uid://bxim3hjs2m1i5" path="res://_ui/hud/hud.gd" id="8_pcykc"]
+[ext_resource type="PackedScene" uid="uid://dut8c2c7xf1og" path="res://_ui/menus/CrossMenu.tscn" id="9_q43ly"]
+[ext_resource type="Script" uid="uid://bsie01oq8xgas" path="res://_ui/menus/cross_menu.gd" id="10_0rjk4"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 height = 1.8
@@ -32,6 +37,21 @@ script = ExtResource("3_mining")
 shape = SubResource("CapsuleShape3D_player")
 
 [node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("5_0rjk4")
 
 [node name="DebugOverlay" type="VBoxContainer" parent="UI" instance=ExtResource("5_7ws7n")]
 script = ExtResource("6_mon3u")
+
+[node name="HUD" type="Control" parent="UI" instance=ExtResource("7_mrmit")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("8_pcykc")
+
+[node name="CrossMenu" type="Control" parent="UI" instance=ExtResource("9_q43ly")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("10_0rjk4")

@@ -1,0 +1,18 @@
+[gd_scene load_steps=2 format=3 uid="uid://b1tc8dl40itw5"]
+
+[ext_resource type="Script" uid="uid://cehaps8btdgs3" path="res://_ui/menus/inventory_menu.gd" id="1_nq8wg"]
+
+[node name="InventoryMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_nq8wg")
+
+[node name="GridContainer" type="GridContainer" parent="."]
+layout_mode = 0
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+columns = 24

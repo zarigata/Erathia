@@ -33,11 +33,19 @@ const CLIMB_HORIZONTAL_SPEED = 2.0
 # Climbing Components
 var climb_cast: ShapeCast3D
 
+@onready var cross_menu = $UI/CrossMenu
+@onready var hud = $UI/HUD
+
 func _ready():
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	add_to_group("Player")
 	_setup_climb_cast()
 	_setup_underwater_effect()
+		
+func _input(event):
+	pass # UI handled by UIController
+
+# func toggle_menu() removed
 
 func _setup_underwater_effect():
 	# 1. UI Overlay (Blue Tint)
