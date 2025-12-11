@@ -121,6 +121,36 @@ func _handle_standard_movement(delta):
 	_handle_controller_look(delta)
 
 	move_and_slide()
+	
+	# Anti-Stuck Mechanism
+	_check_and_unstick(delta, input_dir)
+
+# Anti-Stuck variables
+var _last_position: Vector3 = Vector3.ZERO
+var _stuck_timer: float = 0.0
+const STUCK_THRESHOLD: float = 0.3  # seconds of being stuck before nudge
+const NUDGE_FORCE: float = 2.0
+
+func _check_and_unstick(delta: float, input_dir: Vector2):
+	# Only check if player is trying to move
+	if input_dir.length() > 0.1:
+		var current_pos = global_position
+		var distance_moved = current_pos.distance_to(_last_position)
+		
+		# If barely moved despite trying
+		if distance_moved < 0.05:
+			_stuck_timer += delta
+			if _stuck_timer > STUCK_THRESHOLD:
+				# Nudge player upward to escape geometry
+				global_position.y += NUDGE_FORCE * delta * 10.0
+				_stuck_timer = 0.0
+		else:
+			_stuck_timer = 0.0
+		
+		_last_position = current_pos
+	else:
+		_stuck_timer = 0.0
+		_last_position = global_position
 
 func _handle_fly_movement(delta):
 	var speed = SPRINT_SPEED * 2.0 if Input.is_action_pressed("sprint") else SPRINT_SPEED

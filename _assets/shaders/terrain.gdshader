@@ -244,6 +244,7 @@ void fragment() {
     ROUGHNESS = final_roughness;
     METALLIC = 0.0;
     
-    // Use geometry normal for better lighting
-    NORMAL = normal;
+    // Do not override NORMAL. 
+    // Godot automatically interpolates the Vertex Normal (smooth) and passes it to the fragment shader in View Space.
+    // Overriding it with World Space normal causes incorrect lighting (faceted/flat look).
 }
