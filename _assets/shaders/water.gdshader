@@ -22,6 +22,8 @@ uniform sampler2D texture_normal2;
 uniform sampler2D depth_texture : hint_depth_texture;
 uniform sampler2D screen_texture : hint_screen_texture;
 
+uniform vec3 player_pos = vec3(0.0);
+
 // Foam properties
 uniform float edge_scale = 0.1;
 uniform float near = 1.0;
@@ -38,6 +40,12 @@ float fresnel(float amount, vec3 normal, vec3 view) {
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	height = texture(wave, world_pos.xz / noise_scale + TIME * time_scale).r;
+	
+	// Ripples from player
+	float dist = distance(world_pos.xz, player_pos.xz);
+	float ripple = sin(dist * 2.0 - TIME * 5.0) * exp(-dist * 0.2); // Decay with distance
+	height += ripple * 0.2; // Add ripple influence
+	
 	VERTEX.y += height * height_scale;
 }
 

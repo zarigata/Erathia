@@ -40,6 +40,7 @@ func _ready():
 	_setup_underwater_effect()
 
 func _setup_underwater_effect():
+	# 1. UI Overlay (Blue Tint)
 	var effect_scene = load("res://_player/underwater_post.tscn")
 	if effect_scene:
 		# Create a CanvasLayer to ensure Control nodes render over 3D world
@@ -48,6 +49,27 @@ func _setup_underwater_effect():
 		
 		underwater_effect = effect_scene.instantiate()
 		canvas_layer.add_child(underwater_effect)
+		
+		# HACK: The scene contains 3D particles that shouldn't be under a CanvasLayer or Control.
+		# We need to extract them or handle them separately.
+		# Ideally we'd have separate scenes, but let's reparent them here.
+		
+		var bubbles = underwater_effect.get_node_or_null("Bubbles")
+		var fish = underwater_effect.get_node_or_null("FishParticles")
+		
+		if bubbles:
+			bubbles.get_parent().remove_child(bubbles)
+			camera.add_child(bubbles) # Bubbles attached to camera
+			bubbles.position = Vector3(0, 0, -1.0) # In front of camera
+			bubbles.emitting = false
+			bubbles.name = "Bubbles3D"
+		
+		if fish:
+			fish.get_parent().remove_child(fish)
+			add_child(fish) # Fish attached to player base
+			fish.emitting = false
+			fish.name = "Fish3D"
+
 		underwater_effect.visible = false
 		# Ensure it covers screen
 		underwater_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -105,6 +127,11 @@ func _physics_process(delta):
 		
 		if underwater_effect:
 			underwater_effect.visible = is_swimming
+			var bubbles = camera.get_node_or_null("Bubbles3D")
+			if bubbles: bubbles.emitting = is_swimming
+			
+			var fish = get_node_or_null("Fish3D")
+			if fish: fish.emitting = is_swimming
 		
 		# Oxygen logic
 		if is_swimming:

@@ -21,3 +21,20 @@ func _process(delta):
 		global_position.x = follow_target.global_position.x
 		global_position.z = follow_target.global_position.z
 		# Keep Y at 0 or whatever the water level is set to in editor
+		
+		# Pass player pos to shader for ripples
+		var mat = get_active_material(0)
+		if mat:
+			mat.set_shader_parameter("player_pos", follow_target.global_position)
+			
+			# Ensure noise textures are present (Fix for flat water)
+			if not mat.get_shader_parameter("wave"):
+				var noise = FastNoiseLite.new()
+				noise.noise_type = FastNoiseLite.TYPE_PERLIN
+				noise.frequency = 0.02
+				var noise_tex = NoiseTexture2D.new()
+				noise_tex.noise = noise
+				noise_tex.seamless = true
+				mat.set_shader_parameter("wave", noise_tex)
+				mat.set_shader_parameter("texture_normal", noise_tex)
+				mat.set_shader_parameter("texture_normal2", noise_tex)
