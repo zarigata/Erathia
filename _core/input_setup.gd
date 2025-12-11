@@ -18,7 +18,7 @@ func _setup_inputs():
 		"equip_1": [KEY_1],
 		"equip_2": [KEY_2],
 		"equip_3": [KEY_3],
-		"toggle_console": [KEY_QUOTELEFT]  # Backtick/Tilde key
+		"toggle_console": [KEY_QUOTELEFT, KEY_F1]  # Backtick/Tilde or F1
 	}
 
 	var mouse_inputs = {

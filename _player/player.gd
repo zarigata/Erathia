@@ -25,6 +25,11 @@ const MAX_OXYGEN = 100.0
 const OXYGEN_DEPLETION_RATE = 10.0 # Seconds to empty = 10
 const OXYGEN_REGEN_RATE = 20.0
 
+# Health System
+var health: float = 100.0
+const MAX_HEALTH: float = 100.0
+var god_mode: bool = false
+
 @onready var camera = $Camera3D
 
 const CLIMB_SPEED = 3.0
@@ -230,11 +235,12 @@ func _physics_process(delta):
 			oxygen -= OXYGEN_DEPLETION_RATE * delta
 			if oxygen < 0:
 				oxygen = 0
-				# TODO: Take damage
-				# print("Drowning!") 
+				take_damage(10.0 * delta) # Drowning damage
 		else:
 			oxygen += OXYGEN_REGEN_RATE * delta
 			if oxygen > MAX_OXYGEN: oxygen = MAX_OXYGEN
+
+
 
 		if is_swimming:
 			_handle_swimming_movement(delta)
@@ -377,3 +383,26 @@ func _handle_controller_look(delta):
 		rotate_y(-look_vector.x * JOY_SENSITIVITY * delta)
 		camera.rotate_x(-look_vector.y * JOY_SENSITIVITY * delta)
 		camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-90), deg_to_rad(90))
+
+func take_damage(amount: float):
+	if god_mode: return
+	
+	health -= amount
+	if health <= 0:
+		health = 0
+		die()
+
+func heal(amount: float):
+	health += amount
+	if health > MAX_HEALTH: health = MAX_HEALTH
+	# Also restore oxygen
+	oxygen = MAX_OXYGEN
+
+func die():
+	# TODO: Proper death handling (ragdoll, respawn screen, etc.)
+	# For now, just respawn
+	global_position = Vector3(0, 100, 0)
+	velocity = Vector3.ZERO
+	health = MAX_HEALTH
+	oxygen = MAX_OXYGEN
+	print("Player died and respawned.")
