@@ -12,6 +12,7 @@ var chunk_position: Vector3i
 var biome_manager: BiomeManager
 var density_data: PackedFloat32Array
 var material_data: PackedByteArray
+var decoration_points: Array[Vector3]
 var terrain_material: Material = null
 
 # Precomputed edge table - CRITICAL: edges 0,1,2 must be from corner 0 along X,Y,Z
@@ -52,12 +53,16 @@ func _init(p_noise: FastNoiseLite, p_pos: Vector3i, p_biome_mgr: BiomeManager):
 	
 	material_data = PackedByteArray()
 	material_data.resize(DATA_SIZE * DATA_SIZE * DATA_SIZE)
+	
+	decoration_points = []
 
 func schedule_mesh_update():
 	WorkerThreadPool.add_task(_update_task)
 
 func generate_chunk():
 	WorkerThreadPool.add_task(_init_task)
+
+
 
 func _init_task():
 	_generate_data()
@@ -88,9 +93,21 @@ func _generate_data():
 				
 				# Surface approximation (density close to 0)
 				if d > -1.0 and d < 1.0:
-					mat_id = MiningSystem.MaterialID.GRASS
+					if global_pos.y < -2.0:
+						mat_id = MiningSystem.MaterialID.SAND # Underwater beach/floor
+						# Chance to decorate
+						# Note: This runs for every voxel near surface. We need low probability.
+						if global_pos.y < -5.0 and randf() > 0.995: 
+							# Store local pos relative to chunk origin
+							decoration_points.append(Vector3(x, y, z) - Vector3(1,1,1))
+					else:
+						mat_id = MiningSystem.MaterialID.GRASS
 				elif d > -5.0 and d < -1.0:
 					mat_id = MiningSystem.MaterialID.DIRT
+				
+				# Check for underwater sand vs dirt at depth
+				if global_pos.y < -5.0 and mat_id == MiningSystem.MaterialID.DIRT:
+					mat_id = MiningSystem.MaterialID.SAND
 				
 				# Air check (if density < 0 it's technically air, but we store the material 
 				# of the solid that *would* be there for seamless transitions, 
@@ -266,6 +283,27 @@ func _apply_mesh(array_mesh: ArrayMesh):
 		child.queue_free()
 	add_child(mesh_instance)
 	add_child(collision_shape)
+	
+	# Apply decorations
+	for p in decoration_points:
+		# Randomly choose Starfish or Seaweed
+		if randf() > 0.5:
+			UnderwaterDecorator.spawn_starfish(self, p)
+		else:
+			UnderwaterDecorator.spawn_seaweed(self, p)
+	
+	# Clear points so we don't respawn on next mesh update if we don't regenerate data
+	# But wait, if we only mesh update, we don't regenerate data... 
+	# Actually decoration_points is filled in _generate_data. 
+	# If we just smooth terrain (modify density), we call _update_task which calls _generate_mesh_data.
+	# We lose decorations if we modify terrain? 
+	# Yes, properly we should persists them or re-evaluate. 
+	# For now, simplistic approach: Clear them to avoid duplicates if we somehow re-run safely.
+	# Actually, if we Modify terrain, we don't re-run _generate_data, so points remain.
+	# So we might respawn duplicates if we don't clear? 
+	# But _apply_mesh clears children: `for child in get_children(): child.queue_free()`.
+	# So we are safe to re-spawn from the list.
+	pass
 
 func _calculate_normal(gx: float, gz: float) -> Vector3:
 	var e = 0.1

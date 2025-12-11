@@ -16,7 +16,10 @@ const SWIM_SPEED = 4.0
 const SWIM_UP_SPEED = 3.0
 const BUOYANCY = 5.0 # Upward force when not moving down
 
+
 var is_swimming = false
+var underwater_effect: Control
+
 var oxygen = 100.0
 const MAX_OXYGEN = 100.0
 const OXYGEN_DEPLETION_RATE = 10.0 # Seconds to empty = 10
@@ -34,6 +37,20 @@ func _ready():
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	add_to_group("Player")
 	_setup_climb_cast()
+	_setup_underwater_effect()
+
+func _setup_underwater_effect():
+	var effect_scene = load("res://_player/underwater_post.tscn")
+	if effect_scene:
+		# Create a CanvasLayer to ensure Control nodes render over 3D world
+		var canvas_layer = CanvasLayer.new()
+		add_child(canvas_layer)
+		
+		underwater_effect = effect_scene.instantiate()
+		canvas_layer.add_child(underwater_effect)
+		underwater_effect.visible = false
+		# Ensure it covers screen
+		underwater_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
 
 func _setup_climb_cast():
 	climb_cast = ShapeCast3D.new()
@@ -85,6 +102,9 @@ func _physics_process(delta):
 			is_swimming = true
 		else:
 			is_swimming = false
+		
+		if underwater_effect:
+			underwater_effect.visible = is_swimming
 		
 		# Oxygen logic
 		if is_swimming:

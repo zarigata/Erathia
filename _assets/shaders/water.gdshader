@@ -1,14 +1,15 @@
 shader_type spatial;
+render_mode cull_disabled;
 
-uniform vec3 albedo : source_color = vec3(0.0, 0.3, 0.5);
-uniform vec3 albedo2 : source_color = vec3(0.0, 0.5, 0.7);
-uniform float metallic : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 albedo : source_color = vec3(0.0, 0.32, 0.58);
+uniform vec3 albedo2 : source_color = vec3(0.0, 0.45, 0.65);
+uniform float metallic : hint_range(0.0, 1.0) = 0.1;
 uniform float roughness : hint_range(0.0, 1.0) = 0.02;
 uniform float wave_direction = 1.0;
 uniform float wave_direction2 = 1.0;
-uniform float time_scale : hint_range(0.0, 0.2, 0.005) = 0.025;
+uniform float time_scale : hint_range(0.0, 0.2, 0.005) = 0.05; // Faster water
 uniform float noise_scale = 10.0;
-uniform float height_scale = 0.15;
+uniform float height_scale = 0.4; // Higher waves
 
 uniform vec4 color_deep : source_color = vec4(0.0, 0.1, 0.4, 1.0);
 uniform vec4 color_shallow : source_color = vec4(0.0, 0.6, 0.8, 1.0);
@@ -79,14 +80,15 @@ void fragment() {
 		color = mix(edge_color, color, diff / edge_scale);
 	}
 	
-	ALBEDO = clamp(color + depth_blend_power * 0.1, vec3(0.0), vec3(1.0));
+	ALBEDO = color;
 	METALLIC = metallic;
-	ROUGHNESS = roughness;
+	ROUGHNESS = 0.1; // Increased roughness to reduce milky sky reflection
 	NORMAL_MAP = normal_blend;
 	
 	// Fresnel
 	float fresnel_term = fresnel(5.0, NORMAL, VIEW);
-	ALBEDO += fresnel_term * 0.1;
-	ALPHA = mix(color_shallow.a, color_deep.a, depth_blend_power);
-	ALPHA = clamp(ALPHA + depth_blend * 0.5, 0.0, 1.0);
+	
+	// Alpha - Caps at 0.9 to ensure visibility of underwater content
+	float target_alpha = mix(color_shallow.a, 0.9, depth_blend_power);
+	ALPHA = clamp(target_alpha + fresnel_term * 0.5, 0.0, 0.95);
 }

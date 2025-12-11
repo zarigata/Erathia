@@ -1,0 +1,33 @@
+[gd_scene load_steps=5 format=3 uid="uid://bs4raj5j1rwf8"]
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_uc441"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_uc441"]
+radius = 0.05
+height = 0.1
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_dikxt"]
+emission_shape = 2
+emission_sphere_radius = 1.0
+gravity = Vector3(0, 0, 0)
+
+[sub_resource type="BoxMesh" id="BoxMesh_uc441"]
+size = Vector3(0.5, 0.2, 0.1)
+
+[node name="UnderwaterPost" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+
+[node name="BlueTint" type="ColorRect" parent="."]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0.4, 0.8, 0.3)
+
+[node name="Bubbles" type="GPUParticles3D" parent="."]
+process_material = SubResource("ParticleProcessMaterial_uc441")
+draw_pass_1 = SubResource("SphereMesh_uc441")
+
+[node name="FishParticles" type="GPUParticles3D" parent="."]
+process_material = SubResource("ParticleProcessMaterial_dikxt")
+draw_pass_1 = SubResource("BoxMesh_uc441")
