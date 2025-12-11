@@ -4,7 +4,7 @@ extends Node
 # Simple decorator that spawns props on chunks
 # This is a placeholder for a more complex biome system
 
-static func decorate_chunk(chunk: Node3D, local_pos: Vector3, global_pos: Vector3, density: float):
+static func decorate_chunk(_chunk: Node3D, _local_pos: Vector3, _global_pos: Vector3, _density: float):
 	# Chance to spawn something
 	var rng = randf()
 	if rng > 0.95: # 5% chance per voxel? Too high for voxels. 

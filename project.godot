@@ -23,3 +23,8 @@ InputSetup="*res://_core/input_setup.gd"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/gdai-mcp-plugin-godot/plugin.cfg")
+
+[display]
+
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"

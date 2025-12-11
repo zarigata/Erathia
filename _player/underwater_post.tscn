@@ -19,15 +19,22 @@ layout_mode = 3
 anchors_preset = 0
 
 [node name="BlueTint" type="ColorRect" parent="."]
-layout_mode = 0
+layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-color = Color(0, 0.4, 0.8, 0.3)
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
 
 [node name="Bubbles" type="GPUParticles3D" parent="."]
+amount = 32
+lifetime = 4.0
 process_material = SubResource("ParticleProcessMaterial_uc441")
 draw_pass_1 = SubResource("SphereMesh_uc441")
 
 [node name="FishParticles" type="GPUParticles3D" parent="."]
+amount = 10
+lifetime = 10.0
 process_material = SubResource("ParticleProcessMaterial_dikxt")
 draw_pass_1 = SubResource("BoxMesh_uc441")

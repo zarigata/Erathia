@@ -45,7 +45,8 @@ func _update_sun_position():
 	# If progress is 0.25 (6 AM), we want sun at horizon (0 deg)
 	# If progress is 0.5 (Noon), we want sun at top (-90 deg)
 	
-	var angle = (progress * 360.0) - 90.0
+	# If progress is 0.5 (Noon), we want sun at top (-90 deg)
+	
 	# Adjust so 6AM is sunrise (0 deg), Noon is -90.
 	# formula: angle = (progress * 360) + offset
 	# Noon (0.5) -> 180 + offset = -90 => offset = -270

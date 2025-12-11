@@ -93,7 +93,7 @@ func _handle_primary_action():
 		var power = MiningSystem.get_tool_power(MiningSystem.ToolTier.DIAMOND) # Testing with high power
 		
 		# Effective dig amount
-		var amount = dig_amount
+		var amount = dig_amount * power
 		
 		if current_tool == best_tool:
 			amount *= 2.0 # Bonus for correct tool

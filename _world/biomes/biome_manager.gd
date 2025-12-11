@@ -51,7 +51,7 @@ func get_biome_data(global_x: int, global_z: int, height: float) -> Color:
 		else:
 			return COLOR_DIRT.lerp(COLOR_GRASS, 0.5) # Plains
 			
-	return COLOR_GRASS # Default
+
 
 func _mix_colors(c1: Color, c2: Color, weight: float) -> Color:
 	return c1.lerp(c2, clamp(weight, 0.0, 1.0))

@@ -50,6 +50,14 @@ func _setup_underwater_effect():
 		underwater_effect = effect_scene.instantiate()
 		canvas_layer.add_child(underwater_effect)
 		
+		# Apply Distortion Shader
+		var blue_tint = underwater_effect.get_node("BlueTint")
+		if blue_tint:
+			var shader = load("res://_assets/shaders/underwater_distortion.gdshader")
+			var mat = ShaderMaterial.new()
+			mat.shader = shader
+			blue_tint.material = mat
+		
 		# HACK: The scene contains 3D particles that shouldn't be under a CanvasLayer or Control.
 		# We need to extract them or handle them separately.
 		# Ideally we'd have separate scenes, but let's reparent them here.
@@ -60,15 +68,52 @@ func _setup_underwater_effect():
 		if bubbles:
 			bubbles.get_parent().remove_child(bubbles)
 			camera.add_child(bubbles) # Bubbles attached to camera
-			bubbles.position = Vector3(0, 0, -1.0) # In front of camera
+			bubbles.position = Vector3(0, 0, 0.5) # Behind camera (ears level)
 			bubbles.emitting = false
 			bubbles.name = "Bubbles3D"
+			
+			# Polish Bubbles: Float UP (Gravity negative)
+			# Accessing material programmatically to ensure settings
+			var mat: ParticleProcessMaterial = bubbles.process_material.duplicate()
+			mat.gravity = Vector3(0, 1.0, 0) # Float UP
+			mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+			mat.emission_sphere_radius = 0.8 # Wide area
+			mat.alpha_curve = null # Transparent? We need gradient.
+			mat.color = Color(1, 1, 1, 0.3) # Transparent
+			bubbles.process_material = mat
+			
+			# Polish Bubble Mesh
+			var mesh: SphereMesh = bubbles.draw_pass_1.duplicate()
+			mesh.radius = 0.02 # Smaller
+			mesh.height = 0.04
+			var m_mat = StandardMaterial3D.new()
+			m_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m_mat.albedo_color = Color(1, 1, 1, 0.3)
+			m_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mesh.material = m_mat
+			bubbles.draw_pass_1 = mesh
 		
 		if fish:
 			fish.get_parent().remove_child(fish)
 			add_child(fish) # Fish attached to player base
 			fish.emitting = false
 			fish.name = "Fish3D"
+			
+			# Polish Fish: Swirl
+			var f_mat: ParticleProcessMaterial = fish.process_material.duplicate()
+			f_mat.gravity = Vector3(0, 0, 0)
+			f_mat.turbulence_enabled = true
+			f_mat.turbulence_noise_strength = 2.0
+			f_mat.turbulence_noise_scale = 5.0
+			# Flatten mesh for "fish" look
+			var f_mesh: BoxMesh = fish.draw_pass_1.duplicate()
+			f_mesh.size = Vector3(0.05, 0.1, 0.3) # Thin long fish
+			var fm_mat = StandardMaterial3D.new()
+			fm_mat.albedo_color = Color(0.2, 0.3, 0.8, 0.6) # Transparent blue
+			fm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			f_mesh.material = fm_mat
+			fish.draw_pass_1 = f_mesh
+			fish.process_material = f_mat
 
 		underwater_effect.visible = false
 		# Ensure it covers screen
