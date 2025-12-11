@@ -8,8 +8,8 @@ extends RayCast3D
 @export var mining_cooldown: float = 0.25  # Seconds between actions
 
 # Tool types affect mining behavior
-enum ToolType { HAND, PICKAXE, SHOVEL }
-var current_tool: ToolType = ToolType.HAND
+# Using MiningSystem.ToolType instead of local enum
+var current_tool: int = MiningSystem.ToolType.PICKAXE  # Default
 
 var terrain_manager: TerrainManager
 var cooldown_timer: float = 0.0
@@ -35,16 +35,16 @@ func _process(delta):
 	if cooldown_timer > 0:
 		cooldown_timer -= delta
 	
-	# Handle tool switching (1, 2, 3 keys)
+	# Handle tool switching
 	if Input.is_action_just_pressed("equip_1"):
-		current_tool = ToolType.PICKAXE
+		current_tool = MiningSystem.ToolType.PICKAXE
 		print("Equipped: Pickaxe")
 	elif Input.is_action_just_pressed("equip_2"):
-		current_tool = ToolType.SHOVEL
+		current_tool = MiningSystem.ToolType.SHOVEL
 		print("Equipped: Shovel")
 	elif Input.is_action_just_pressed("equip_3"):
-		current_tool = ToolType.HAND
-		print("Equipped: Hand")
+		current_tool = MiningSystem.ToolType.HOE  # Using Hoe for smooth/flatten
+		print("Equipped: Hoe/Staff")
 	
 	# Check if we're hitting terrain
 	if not is_colliding():
@@ -56,61 +56,78 @@ func _process(delta):
 	if not collider is Chunk:
 		return
 	
-	# Handle mining (left click / attack)
+	# Handle mining/primary action (left click)
 	if Input.is_action_pressed("attack") and cooldown_timer <= 0:
-		_perform_dig()
+		_handle_primary_action()
 		cooldown_timer = mining_cooldown
 	
-	# Handle building (right click / interact_alt or use)
+	# Handle specific secondary actions (right click)
 	if Input.is_action_pressed("use") and cooldown_timer <= 0:
-		_perform_build()
+		_handle_secondary_action()
 		cooldown_timer = mining_cooldown
 
-func _perform_dig():
-	if not terrain_manager:
-		return
+func _handle_primary_action():
+	if not terrain_manager: return
 	
 	var hit_point = get_collision_point()
 	var hit_normal = get_collision_normal()
 	
-	# Offset slightly into the terrain for digging
-	var dig_point = hit_point - hit_normal * 0.5
-	
-	# Tool modifiers
-	var amount = dig_amount
-	match current_tool:
-		ToolType.PICKAXE:
-			amount = dig_amount * 1.5  # Pickaxe digs deeper
-		ToolType.SHOVEL:
-			amount = dig_amount * 1.2  # Shovel is faster for soft terrain
-		ToolType.HAND:
-			amount = dig_amount * 0.3  # Hand is slow
-	
-	terrain_manager.modify_terrain(dig_point, amount)
-	
-	# Visual/audio feedback placeholder
-	_spawn_mining_particles(hit_point)
+	if current_tool == MiningSystem.ToolType.HOE or current_tool == MiningSystem.ToolType.STAFF:
+		# Smoothing Mode
+		terrain_manager.smooth_terrain(hit_point, 3.0) # Radius 3
+		print("Smoothing terrain...")
+	else:
+		# Digging Mode
+		# Offset slightly into the terrain
+		var dig_point = hit_point - hit_normal * 0.5
+		
+		# Get material
+		var mat_id = terrain_manager.get_material_at(dig_point)
+		var hardness = MiningSystem.get_material_hardness(mat_id)
+		
+		# Check tool compatibility
+		var best_tool = MiningSystem.get_preferred_tool(mat_id)
+		
+		# Calculate effective power
+		# For simplicity, assuming DIAMOND tier for now or base multiplier
+		var power = MiningSystem.get_tool_power(MiningSystem.ToolTier.DIAMOND) # Testing with high power
+		
+		# Effective dig amount
+		var amount = dig_amount
+		
+		if current_tool == best_tool:
+			amount *= 2.0 # Bonus for correct tool
+		
+		# Hardness reduction
+		if hardness > 0:
+			amount /= (hardness / 10.0) # Simple formula
+			
+		terrain_manager.modify_terrain(dig_point, amount)
+		
+		# Loot Logic
+		if mat_id != MiningSystem.MaterialID.AIR:
+			var loot = MiningSystem.get_loot_item(mat_id)
+			if loot != "":
+				print("Mined: " + loot)
 
-func _perform_build():
-	if not terrain_manager:
-		return
+func _handle_secondary_action():
+	if not terrain_manager: return
 	
 	var hit_point = get_collision_point()
 	var hit_normal = get_collision_normal()
 	
-	# Offset slightly above the terrain for building
-	var build_point = hit_point + hit_normal * 0.5
-	
-	terrain_manager.modify_terrain(build_point, build_amount)
+	if current_tool == MiningSystem.ToolType.HOE or current_tool == MiningSystem.ToolType.STAFF:
+		# Flatten Mode
+		# Flatten to player height or hit height? Let's flatten to hit height
+		terrain_manager.flatten_terrain(hit_point, 3.0, hit_point.y)
+		print("Flattening terrain...")
+	else:
+		# Build Mode (Place block/dirt)
+		var build_point = hit_point + hit_normal * 0.5
+		terrain_manager.modify_terrain(build_point, build_amount)
 
-func _spawn_mining_particles(pos: Vector3):
-	# Placeholder for particle effects
-	# TODO: Add actual particle system
-	pass
-
-# Public API for tool management
-func set_tool(tool: ToolType):
+func set_tool(tool: int):
 	current_tool = tool
 
-func get_tool() -> ToolType:
+func get_tool() -> int:
 	return current_tool

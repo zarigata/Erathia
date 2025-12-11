@@ -11,6 +11,7 @@ var noise: FastNoiseLite
 var chunk_position: Vector3i
 var biome_manager: BiomeManager
 var density_data: PackedFloat32Array
+var material_data: PackedByteArray
 var terrain_material: Material = null
 
 # Precomputed edge table - CRITICAL: edges 0,1,2 must be from corner 0 along X,Y,Z
@@ -48,6 +49,12 @@ func _init(p_noise: FastNoiseLite, p_pos: Vector3i, p_biome_mgr: BiomeManager):
 	
 	density_data = PackedFloat32Array()
 	density_data.resize(DATA_SIZE * DATA_SIZE * DATA_SIZE)
+	
+	material_data = PackedByteArray()
+	material_data.resize(DATA_SIZE * DATA_SIZE * DATA_SIZE)
+
+func schedule_mesh_update():
+	WorkerThreadPool.add_task(_update_task)
 
 func generate_chunk():
 	WorkerThreadPool.add_task(_init_task)
@@ -74,10 +81,43 @@ func _generate_data():
 				var d = height - global_pos.y
 				
 				density_data[idx] = d
+				
+				# Generate Material ID
+				# Simple Logic: Grass on top, Dirt below, Stone deeper
+				var mat_id = MiningSystem.MaterialID.STONE
+				
+				# Surface approximation (density close to 0)
+				if d > -1.0 and d < 1.0:
+					mat_id = MiningSystem.MaterialID.GRASS
+				elif d > -5.0 and d < -1.0:
+					mat_id = MiningSystem.MaterialID.DIRT
+				
+				# Air check (if density < 0 it's technically air, but we store the material 
+				# of the solid that *would* be there for seamless transitions, 
+				# OR we store AIR. For now, solid logic)
+				if d < 0:
+					mat_id = MiningSystem.MaterialID.AIR
+					
+				material_data[idx] = mat_id
+				
 				idx += 1
 
 func _get_density(x: int, y: int, z: int) -> float:
 	return density_data[x + y * DATA_SIZE + z * DATA_SIZE * DATA_SIZE]
+
+func _get_material(x: int, y: int, z: int) -> int:
+	return material_data[x + y * DATA_SIZE + z * DATA_SIZE * DATA_SIZE]
+
+func set_material_at(local_pos: Vector3i, mat_id: int):
+	# Offset for padding
+	var x = local_pos.x + 1
+	var y = local_pos.y + 1
+	var z = local_pos.z + 1
+	
+	if x >= 0 and x < DATA_SIZE and y >= 0 and y < DATA_SIZE and z >= 0 and z < DATA_SIZE:
+		var idx = x + y * DATA_SIZE + z * DATA_SIZE * DATA_SIZE
+		material_data[idx] = mat_id
+		schedule_mesh_update()
 
 func _generate_mesh_data() -> ArrayMesh:
 	var vertices: PackedVector3Array = PackedVector3Array()

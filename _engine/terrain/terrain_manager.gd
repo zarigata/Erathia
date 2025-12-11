@@ -72,3 +72,51 @@ func modify_terrain(global_pos: Vector3, amount: float):
 				var cpos = Vector3i(x, y, z)
 				if chunks.has(cpos):
 					chunks[cpos].modify_sphere(global_pos - chunks[cpos].global_position, radius, amount)
+
+func get_material_at(global_pos: Vector3) -> int:
+	var chunk_pos = Vector3i(
+		int(floor(global_pos.x / CHUNK_SIZE)),
+		int(floor(global_pos.y / CHUNK_SIZE)),
+		int(floor(global_pos.z / CHUNK_SIZE))
+	)
+	
+	if chunks.has(chunk_pos):
+		# Convert to local 0-based coords
+		var local_pos = global_pos - chunks[chunk_pos].global_position
+		# The Chunk internal storage expects 0-based index for access methods?
+		# Actually _get_material expects buffered index (0..DATA_SIZE).
+		# Local pos 0,0,0 corresponds to buffer index 1,1,1 due to padding
+		var bx = int(local_pos.x) + 1
+		var by = int(local_pos.y) + 1
+		var bz = int(local_pos.z) + 1
+		
+		# We need to expose _get_material as public or make a public wrapper
+		# For now, let's assume we can access it or duplicate logic.
+		# Ideally Chunk should have `get_material_local(vec3)`.
+		# Let's fix Chunk first or do direct access if GDScript allows (it does).
+		return chunks[chunk_pos]._get_material(bx, by, bz)
+	
+	return MiningSystem.MaterialID.AIR
+
+func smooth_terrain(global_pos: Vector3, radius: float):
+	var chunk_pos = Vector3i(
+		int(floor(global_pos.x / CHUNK_SIZE)),
+		int(floor(global_pos.y / CHUNK_SIZE)),
+		int(floor(global_pos.z / CHUNK_SIZE))
+	)
+	
+	# For smoothing, we mostly care about the center chunk for now
+	if chunks.has(chunk_pos):
+		var local_pos = global_pos - chunks[chunk_pos].global_position
+		TerrainEditSystem.smooth_terrain(chunks[chunk_pos], local_pos, radius)
+
+func flatten_terrain(global_pos: Vector3, radius: float, target_height: float):
+	var chunk_pos = Vector3i(
+		int(floor(global_pos.x / CHUNK_SIZE)),
+		int(floor(global_pos.y / CHUNK_SIZE)),
+		int(floor(global_pos.z / CHUNK_SIZE))
+	)
+	
+	if chunks.has(chunk_pos):
+		var local_pos = global_pos - chunks[chunk_pos].global_position
+		TerrainEditSystem.flatten_terrain(chunks[chunk_pos], local_pos, radius, target_height)
