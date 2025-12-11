@@ -10,6 +10,18 @@ const JOY_SENSITIVITY = 2.0 # Higher sensitivity for sticks
 # Get the gravity from the project settings to be synced with RigidBody nodes.
 var gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
 
+const WATER_LEVEL = 0.0
+const WATER_SURFACE_OFFSET = 1.6 # Camera height/Head
+const SWIM_SPEED = 4.0
+const SWIM_UP_SPEED = 3.0
+const BUOYANCY = 5.0 # Upward force when not moving down
+
+var is_swimming = false
+var oxygen = 100.0
+const MAX_OXYGEN = 100.0
+const OXYGEN_DEPLETION_RATE = 10.0 # Seconds to empty = 10
+const OXYGEN_REGEN_RATE = 20.0
+
 @onready var camera = $Camera3D
 
 const CLIMB_SPEED = 3.0
@@ -67,16 +79,37 @@ func _physics_process(delta):
 	if fly_mode:
 		_handle_fly_movement(delta)
 	else:
-		var is_climbing = false
-		if not is_on_floor():
-			# Check for climbing
-			if Input.is_action_pressed("move_forward") and climb_cast.is_colliding():
-				is_climbing = true
-		
-		if is_climbing:
-			_handle_climb_movement(delta)
+		# Check water depth
+		# If head is below water level -> Swimming
+		if global_position.y + 1.2 < WATER_LEVEL: # 1.2 approx chest/neck height
+			is_swimming = true
 		else:
-			_handle_standard_movement(delta)
+			is_swimming = false
+		
+		# Oxygen logic
+		if is_swimming:
+			oxygen -= OXYGEN_DEPLETION_RATE * delta
+			if oxygen < 0:
+				oxygen = 0
+				# TODO: Take damage
+				# print("Drowning!") 
+		else:
+			oxygen += OXYGEN_REGEN_RATE * delta
+			if oxygen > MAX_OXYGEN: oxygen = MAX_OXYGEN
+
+		if is_swimming:
+			_handle_swimming_movement(delta)
+		else:
+			var is_climbing = false
+			if not is_on_floor():
+				# Check for climbing
+				if Input.is_action_pressed("move_forward") and climb_cast.is_colliding():
+					is_climbing = true
+			
+			if is_climbing:
+				_handle_climb_movement(delta)
+			else:
+				_handle_standard_movement(delta)
 
 func _handle_climb_movement(delta):
 	# Climbing Logic (Blue Zone)
@@ -119,11 +152,34 @@ func _handle_standard_movement(delta):
 		
 	# Controller Look (Right Stick)
 	_handle_controller_look(delta)
-
+	
 	move_and_slide()
 	
 	# Anti-Stuck Mechanism
 	_check_and_unstick(delta, input_dir)
+
+func _handle_swimming_movement(delta):
+	# Movement similar to fly mode but slower and with buoyancy
+	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
+	var direction = (camera.global_transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
+	
+	# Swimming Up (Space) / Down (Ctrl - optional, or just camera look)
+	if Input.is_action_pressed("jump"): # Space to ascend
+		direction.y += 0.8
+	
+	# If not moving down, apply buoyancy (float up)
+	# Only if not trying to dive
+	if direction.y > -0.1 and global_position.y < WATER_LEVEL - 0.5:
+		velocity.y += BUOYANCY * delta
+		velocity.y = min(velocity.y, 2.0) # Cap upward drift
+	
+	if direction:
+		velocity = velocity.lerp(direction * SWIM_SPEED, delta * 2.0)
+	else:
+		velocity = velocity.lerp(Vector3(0, velocity.y, 0), delta * 1.0) # Drag
+	
+	_handle_controller_look(delta)
+	move_and_slide()
 
 # Anti-Stuck variables
 var _last_position: Vector3 = Vector3.ZERO
