@@ -1,0 +1,17 @@
+[gd_scene load_steps=3 format=3 uid="uid://dyrauxpb0vero"]
+
+[ext_resource type="Script" path="res://_engine/terrain/voxel_terrain_generator.gd" id="1_generator"]
+
+[sub_resource type="VoxelMesherTransvoxel" id="VoxelMesherTransvoxel_1"]
+
+[node name="VoxelTerrain" type="VoxelLodTerrain"]
+stream = null
+generator = ExtResource("1_generator")
+mesher = SubResource("VoxelMesherTransvoxel_1")
+view_distance = 512
+lod_count = 4
+lod_distance = 48.0
+collision_enabled = true
+collision_layer = 1
+collision_mask = 1
+collision_lod_count = 2

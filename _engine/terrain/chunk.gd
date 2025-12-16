@@ -39,6 +39,8 @@ const CORNER_OFFSETS = [
 	Vector3i(0, 0, 1), Vector3i(1, 0, 1), Vector3i(0, 1, 1), Vector3i(1, 1, 1)
 ]
 
+var _is_initialized: bool = false
+
 func _init(p_noise: FastNoiseLite, p_pos: Vector3i, p_biome_mgr: BiomeManager):
 	noise = p_noise
 	chunk_position = p_pos
@@ -48,13 +50,18 @@ func _init(p_noise: FastNoiseLite, p_pos: Vector3i, p_biome_mgr: BiomeManager):
 	if ResourceLoader.exists(mat_path):
 		terrain_material = load(mat_path)
 	
+	# Pre-allocate arrays with proper size
+	var total_size: int = DATA_SIZE * DATA_SIZE * DATA_SIZE
 	density_data = PackedFloat32Array()
-	density_data.resize(DATA_SIZE * DATA_SIZE * DATA_SIZE)
+	density_data.resize(total_size)
+	density_data.fill(0.0)
 	
 	material_data = PackedByteArray()
-	material_data.resize(DATA_SIZE * DATA_SIZE * DATA_SIZE)
+	material_data.resize(total_size)
+	material_data.fill(0)
 	
 	decoration_points = []
+	_is_initialized = true
 
 func schedule_mesh_update():
 	WorkerThreadPool.add_task(_update_task)
@@ -65,12 +72,20 @@ func generate_chunk():
 
 
 func _init_task():
+	if not _is_initialized:
+		return
 	_generate_data()
 	_update_task()
 
 func _update_task():
+	if not _is_initialized:
+		return
 	var mesh_data = _generate_mesh_data()
 	call_deferred("_apply_mesh", mesh_data)
+
+func _deferred_mesh_update():
+	# Run mesh generation on worker thread, apply on main thread
+	WorkerThreadPool.add_task(_update_task)
 
 func _generate_data():
 	var idx = 0
@@ -81,42 +96,58 @@ func _generate_data():
 				var local_pos = Vector3i(x - 1, y - 1, z - 1)
 				var global_pos = (chunk_position * CHUNK_SIZE) + local_pos
 				
-				# Height-based density (positive = solid, negative = air)
-				var height = noise.get_noise_2d(global_pos.x, global_pos.z) * 50.0
-				var d = height - global_pos.y
+				# Use BiomeManager for height if available
+				var height: float
+				if biome_manager:
+					height = biome_manager.get_terrain_height(global_pos.x, global_pos.z)
+				else:
+					height = noise.get_noise_2d(global_pos.x, global_pos.z) * 50.0
 				
+				# Height-based density (positive = solid, negative = air)
+				var d = height - global_pos.y
 				density_data[idx] = d
 				
-				# Generate Material ID
-				# Simple Logic: Grass on top, Dirt below, Stone deeper
+				# Generate Material ID based on biome
 				var mat_id = MiningSystem.MaterialID.STONE
 				
+				# Get biome for surface material
+				var biome: BiomeDefinition = null
+				if biome_manager:
+					biome = biome_manager.get_biome_data(global_pos.x, global_pos.z)
+				
 				# Surface approximation (density close to 0)
-				if d > -1.0 and d < 1.0:
-					if global_pos.y < -2.0:
-						mat_id = MiningSystem.MaterialID.SAND # Underwater beach/floor
-						# Chance to decorate
-						# Note: This runs for every voxel near surface. We need low probability.
-						if global_pos.y < -5.0 and randf() > 0.995: 
-							# Store local pos relative to chunk origin
-							decoration_points.append(Vector3(x, y, z) - Vector3(1,1,1))
+				if d > -1.5 and d < 1.5:
+					if biome:
+						# Use biome-specific surface material
+						if biome.biome_name == &"OCEAN":
+							mat_id = MiningSystem.MaterialID.SAND
+						elif biome.biome_name == &"BEACH":
+							mat_id = MiningSystem.MaterialID.SAND
+						elif biome.biome_name == &"DESERT":
+							mat_id = MiningSystem.MaterialID.SAND
+						elif biome.biome_name == &"TUNDRA":
+							mat_id = MiningSystem.MaterialID.SNOW
+						elif biome.biome_name == &"MOUNTAIN":
+							mat_id = MiningSystem.MaterialID.STONE
+						else:
+							mat_id = MiningSystem.MaterialID.GRASS
 					else:
-						mat_id = MiningSystem.MaterialID.GRASS
-				elif d > -5.0 and d < -1.0:
+						if global_pos.y < -2.0:
+							mat_id = MiningSystem.MaterialID.SAND
+						else:
+							mat_id = MiningSystem.MaterialID.GRASS
+					
+					# Decoration chance for underwater
+					if global_pos.y < -5.0 and randf() > 0.995:
+						decoration_points.append(Vector3(x, y, z) - Vector3(1,1,1))
+				elif d > -5.0 and d < -1.5:
 					mat_id = MiningSystem.MaterialID.DIRT
 				
-				# Check for underwater sand vs dirt at depth
-				if global_pos.y < -5.0 and mat_id == MiningSystem.MaterialID.DIRT:
-					mat_id = MiningSystem.MaterialID.SAND
-				
-				# Air check (if density < 0 it's technically air, but we store the material 
-				# of the solid that *would* be there for seamless transitions, 
-				# OR we store AIR. For now, solid logic)
+				# Air check
 				if d < 0:
 					mat_id = MiningSystem.MaterialID.AIR
 					
 				material_data[idx] = mat_id
-				
 				idx += 1
 
 func _get_density(x: int, y: int, z: int) -> float:
@@ -271,6 +302,11 @@ func _apply_mesh(array_mesh: ArrayMesh):
 	if not array_mesh:
 		return
 	
+	# Remove old children immediately (not queue_free which is deferred)
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
+	
 	var mesh_instance = MeshInstance3D.new()
 	mesh_instance.mesh = array_mesh
 	if terrain_material:
@@ -279,18 +315,15 @@ func _apply_mesh(array_mesh: ArrayMesh):
 	var collision_shape = CollisionShape3D.new()
 	collision_shape.shape = array_mesh.create_trimesh_shape()
 	
-	for child in get_children():
-		child.queue_free()
 	add_child(mesh_instance)
 	add_child(collision_shape)
 	
-	# Apply decorations
-	for p in decoration_points:
-		# Randomly choose Starfish or Seaweed
-		if randf() > 0.5:
-			UnderwaterDecorator.spawn_starfish(self, p)
-		else:
-			UnderwaterDecorator.spawn_seaweed(self, p)
+	# Apply decorations (disabled until UnderwaterDecorator is implemented)
+	# for p in decoration_points:
+	# 	if randf() > 0.5:
+	# 		UnderwaterDecorator.spawn_starfish(self, p)
+	# 	else:
+	# 		UnderwaterDecorator.spawn_seaweed(self, p)
 	
 	# Clear points so we don't respawn on next mesh update if we don't regenerate data
 	# But wait, if we only mesh update, we don't regenerate data... 
@@ -319,23 +352,32 @@ func _calculate_normal(gx: float, gz: float) -> Vector3:
 func modify_sphere(center_local: Vector3, radius: float, value: float):
 	var center_data = center_local + Vector3(1, 1, 1)
 	
-	var r_int = ceil(radius) + 1
-	var min_box = (center_data - Vector3(r_int, r_int, r_int)).floor()
-	var max_box = (center_data + Vector3(r_int, r_int, r_int)).ceil()
+	var r_int = int(ceil(radius)) + 1
+	var min_x = maxi(0, int(center_data.x) - r_int)
+	var max_x = mini(DATA_SIZE - 1, int(center_data.x) + r_int)
+	var min_y = maxi(0, int(center_data.y) - r_int)
+	var max_y = mini(DATA_SIZE - 1, int(center_data.y) + r_int)
+	var min_z = maxi(0, int(center_data.z) - r_int)
+	var max_z = mini(DATA_SIZE - 1, int(center_data.z) + r_int)
 	
 	var radius_sq = radius * radius
 	var modified = false
+	var max_idx = DATA_SIZE * DATA_SIZE * DATA_SIZE - 1
 	
-	for z in range(max(0, min_box.z), min(DATA_SIZE, max_box.z)):
-		for y in range(max(0, min_box.y), min(DATA_SIZE, max_box.y)):
-			for x in range(max(0, min_box.x), min(DATA_SIZE, max_box.x)):
+	for z in range(min_z, max_z + 1):
+		for y in range(min_y, max_y + 1):
+			for x in range(min_x, max_x + 1):
 				var corner_pos = Vector3(x, y, z)
 				var dist_sq = corner_pos.distance_squared_to(center_data)
 				
 				if dist_sq <= radius_sq:
 					var idx = x + (y * DATA_SIZE) + (z * DATA_SIZE * DATA_SIZE)
-					density_data[idx] += value
-					modified = true
+					if idx >= 0 and idx <= max_idx:
+						var old_val = density_data[idx]
+						density_data[idx] += value
+						if abs(old_val - density_data[idx]) > 0.01:
+							modified = true
 	
 	if modified:
-		WorkerThreadPool.add_task(_update_task)
+		# Update mesh on main thread to avoid threading issues
+		call_deferred("_deferred_mesh_update")

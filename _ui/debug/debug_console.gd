@@ -29,19 +29,25 @@ func _toggle_console():
 		input_line.clear()
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
-func _input(event):
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("toggle_console"):
+		_toggle_console()
+		get_viewport().set_input_as_handled()
+		return
+
+func _input(event: InputEvent) -> void:
+	# Only process when visible
+	if not visible:
+		return
+	
+	# History navigation when console is visible
 	if event is InputEventKey and event.pressed:
-		if event.is_action_pressed("toggle_console"):
-			_toggle_console()
-			if visible:
-				get_viewport().set_input_as_handled() # Prevent key from being handled elsewhere
-			elif visible:
-				if event.keycode == KEY_UP:
-					_history_up()
-					get_viewport().set_input_as_handled()
-				elif event.keycode == KEY_DOWN:
-					_history_down()
-					get_viewport().set_input_as_handled()
+		if event.keycode == KEY_UP:
+			_history_up()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_DOWN:
+			_history_down()
+			get_viewport().set_input_as_handled()
 
 func _history_up():
 	if history.size() == 0: return

@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3 uid="uid://cvuylxjnrqyix"]
+[gd_scene load_steps=16 format=3 uid="uid://cvuylxjnrqyix"]
 
 [ext_resource type="Script" uid="uid://dnrmijpgabyem" path="res://_engine/terrain/terrain_manager.gd" id="1_3tbxw"]
 [ext_resource type="PackedScene" uid="uid://c7175ielkgus4" path="res://_player/player.tscn" id="2_ws5ob"]
@@ -9,8 +9,8 @@
 [ext_resource type="Script" uid="uid://cvigwpdabfr0x" path="res://_world/day_night_cycle.gd" id="9_cycle"]
 [ext_resource type="PackedScene" path="res://_world/test_cube.tscn" id="10_cube"]
 [ext_resource type="PackedScene" uid="uid://cjbbkec7ivjnh" path="res://_world/water_plane.tscn" id="10_qtrx8"]
+[ext_resource type="Script" uid="uid://bcjdtfuurpvrv" path="res://_world/biomes/FoliageManager.gd" id="11_0v7qb"]
 [ext_resource type="Shader" uid="uid://r3nxllldne3" path="res://_assets/shaders/water.gdshader" id="11_led80"]
-[ext_resource type="Script" uid="uid://ee3hx6tjyl0p" path="res://_world/water_plane.gd" id="12_mi4js"]
 
 [sub_resource type="Sky" id="Sky_procedural"]
 sky_material = ExtResource("8_skymat")
@@ -22,8 +22,8 @@ ambient_light_source = 2
 ambient_light_color = Color(0.8, 0.8, 0.9, 1)
 fog_enabled = true
 fog_light_color = Color(0.5, 0.6, 0.7, 1)
-fog_density = 0.002
-fog_sky_affect = 0.0
+fog_density = 0.0025
+fog_sky_affect = 0.3
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_a2q5p"]
 render_priority = 0
@@ -41,6 +41,7 @@ shader_parameter/color_deep = Color(0, 0.1, 0.4, 1)
 shader_parameter/color_shallow = Color(0, 0.6, 0.8, 1)
 shader_parameter/beers_law = 2.0
 shader_parameter/depth_offset = -0.75
+shader_parameter/player_pos = Vector3(0, 0, 0)
 shader_parameter/edge_scale = 0.1
 shader_parameter/near = 1.0
 shader_parameter/far = 100.0
@@ -59,7 +60,7 @@ subdivide_depth = 100
 script = ExtResource("1_3tbxw")
 
 [node name="Player" parent="." instance=ExtResource("2_ws5ob")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 30, 0)
 
 [node name="TestCube" parent="." instance=ExtResource("10_cube")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 50, 5)
@@ -76,13 +77,11 @@ environment = SubResource("Environment_ws5ob")
 
 [node name="Crosshair" parent="CanvasLayer" instance=ExtResource("9_crosshair")]
 
-# Old PauseMenu removed - now handled by Player/UI/UIController
-
 [node name="DebugConsole" parent="CanvasLayer" instance=ExtResource("6_debug")]
-visible = false
 
-[node name="WaterPlane" type="MeshInstance3D" parent="." instance=ExtResource("10_qtrx8")]
+[node name="WaterPlane" parent="." instance=ExtResource("10_qtrx8")]
 material_override = SubResource("ShaderMaterial_a2q5p")
-cast_shadow = 0
 mesh = SubResource("PlaneMesh_i7o6l")
-script = ExtResource("12_mi4js")
+
+[node name="FoliageManager" type="Node3D" parent="."]
+script = ExtResource("11_0v7qb")

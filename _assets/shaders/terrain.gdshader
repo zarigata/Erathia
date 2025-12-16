@@ -13,10 +13,10 @@ render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_sc
 // ============================================
 
 // Height thresholds
-uniform float beach_max_height : hint_range(0.0, 20.0) = 5.0;
-uniform float grass_max_height : hint_range(10.0, 50.0) = 25.0;
-uniform float rock_max_height : hint_range(20.0, 60.0) = 40.0;
-uniform float snow_min_height : hint_range(30.0, 80.0) = 35.0;
+uniform float beach_max_height : hint_range(0.0, 20.0) = 8.0;
+uniform float grass_max_height : hint_range(10.0, 80.0) = 45.0;
+uniform float rock_max_height : hint_range(20.0, 100.0) = 70.0;
+uniform float snow_min_height : hint_range(30.0, 120.0) = 65.0;
 
 // Slope thresholds
 uniform float snow_slope_threshold : hint_range(0.0, 1.0) = 0.7;  // dot with UP (1 = flat, 0 = vertical)
