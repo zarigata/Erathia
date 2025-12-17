@@ -1,408 +1,207 @@
-class_name Player
 extends CharacterBody3D
 
-const WALK_SPEED = 5.0
-const SPRINT_SPEED = 10.0
-const JUMP_VELOCITY = 4.5
-const SENSITIVITY = 0.003
-const JOY_SENSITIVITY = 2.0 # Higher sensitivity for sticks
+# Camera mode enum
+enum CameraMode { THIRD_PERSON, FIRST_PERSON }
 
-# Get the gravity from the project settings to be synced with RigidBody nodes.
-var gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
+# Movement parameters
+@export_group("Movement")
+@export var walk_speed: float = 5.0
+@export var sprint_speed: float = 8.0
+@export var acceleration: float = 10.0
+@export var friction: float = 15.0
 
-const WATER_LEVEL = 0.0
-const WATER_SURFACE_OFFSET = 1.6 # Camera height/Head
-const SWIM_SPEED = 4.0
-const SWIM_UP_SPEED = 3.0
-const BUOYANCY = 5.0 # Upward force when not moving down
+# Jump parameters
+@export_group("Jump")
+@export var jump_velocity: float = 6.0
+@export var jump_stamina_cost: float = 25.0
 
+# Stamina parameters
+@export_group("Stamina")
+@export var max_stamina: float = 100.0
+@export var stamina_regen_rate: float = 20.0
+@export var stamina_regen_delay: float = 1.0
+@export var sprint_stamina_cost: float = 15.0
 
-var is_swimming = false
-var underwater_effect: Control
+# Camera parameters
+@export_group("Camera")
+@export var mouse_sensitivity: float = 0.002
+@export var camera_distance: float = 3.0
+@export var min_pitch: float = -60.0
+@export var max_pitch: float = 60.0
 
-var oxygen = 100.0
-const MAX_OXYGEN = 100.0
-const OXYGEN_DEPLETION_RATE = 10.0 # Seconds to empty = 10
-const OXYGEN_REGEN_RATE = 20.0
+# Camera View parameters
+@export_group("Camera View")
+@export var first_person_fov: float = 90.0
+@export var third_person_fov: float = 75.0
+@export var camera_transition_speed: float = 10.0
+@export var first_person_min_pitch: float = -89.0
+@export var first_person_max_pitch: float = 89.0
 
-# Health System
-var health: float = 100.0
-const MAX_HEALTH: float = 100.0
-var god_mode: bool = false
+# Physics
+@export_group("Physics")
+@export var gravity: float = 15.0
 
-@onready var camera = $Camera3D
+# State variables
+var current_stamina: float
+var stamina_regen_timer: float = 0.0
+var is_sprinting: bool = false
 
-const CLIMB_SPEED = 3.0
-const CLIMB_HORIZONTAL_SPEED = 2.0
+# Camera state variables
+var current_camera_mode: CameraMode = CameraMode.THIRD_PERSON
+var target_camera_distance: float
+var first_person_distance: float = 0.0
 
-# Climbing Components
-var climb_cast: ShapeCast3D
-
-@onready var cross_menu = $UI/CrossMenu
-@onready var hud = $UI/HUD
-
-func _ready():
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	add_to_group("Player")
-	_setup_climb_cast()
-	_setup_underwater_effect()
-		
-func _input(event):
-	pass # UI handled by UIController
-
-# func toggle_menu() removed
-
-func _setup_underwater_effect():
-	# 1. UI Overlay (Blue Tint)
-	var effect_scene = load("res://_player/underwater_post.tscn")
-	if effect_scene:
-		# Create a CanvasLayer to ensure Control nodes render over 3D world
-		var canvas_layer = CanvasLayer.new()
-		add_child(canvas_layer)
-		
-		underwater_effect = effect_scene.instantiate()
-		canvas_layer.add_child(underwater_effect)
-		
-		# Apply Distortion Shader
-		var blue_tint = underwater_effect.get_node("BlueTint")
-		if blue_tint:
-			var shader = load("res://_assets/shaders/underwater_distortion.gdshader")
-			var mat = ShaderMaterial.new()
-			mat.shader = shader
-			blue_tint.material = mat
-		
-		# HACK: The scene contains 3D particles that shouldn't be under a CanvasLayer or Control.
-		# We need to extract them or handle them separately.
-		# Ideally we'd have separate scenes, but let's reparent them here.
-		
-		var bubbles = underwater_effect.get_node_or_null("Bubbles")
-		var fish = underwater_effect.get_node_or_null("FishParticles")
-		
-		if bubbles:
-			bubbles.get_parent().remove_child(bubbles)
-			camera.add_child(bubbles) # Bubbles attached to camera
-			bubbles.position = Vector3(0, 0, 0.5) # Behind camera (ears level)
-			bubbles.emitting = false
-			bubbles.name = "Bubbles3D"
-			
-			# Polish Bubbles: Float UP (Gravity negative)
-			# Accessing material programmatically to ensure settings
-			var mat: ParticleProcessMaterial = bubbles.process_material.duplicate()
-			mat.gravity = Vector3(0, 1.0, 0) # Float UP
-			mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-			mat.emission_sphere_radius = 0.8 # Wide area
-			mat.alpha_curve = null # Transparent? We need gradient.
-			mat.color = Color(1, 1, 1, 0.3) # Transparent
-			bubbles.process_material = mat
-			
-			# Polish Bubble Mesh
-			var mesh: SphereMesh = bubbles.draw_pass_1.duplicate()
-			mesh.radius = 0.02 # Smaller
-			mesh.height = 0.04
-			var m_mat = StandardMaterial3D.new()
-			m_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			m_mat.albedo_color = Color(1, 1, 1, 0.3)
-			m_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			mesh.material = m_mat
-			bubbles.draw_pass_1 = mesh
-		
-		if fish:
-			fish.get_parent().remove_child(fish)
-			add_child(fish) # Fish attached to player base
-			fish.emitting = false
-			fish.name = "Fish3D"
-			
-			# Polish Fish: Swirl
-			var f_mat: ParticleProcessMaterial = fish.process_material.duplicate()
-			f_mat.gravity = Vector3(0, 0, 0)
-			f_mat.turbulence_enabled = true
-			f_mat.turbulence_noise_strength = 2.0
-			f_mat.turbulence_noise_scale = 5.0
-			# Flatten mesh for "fish" look
-			var f_mesh: BoxMesh = fish.draw_pass_1.duplicate()
-			f_mesh.size = Vector3(0.05, 0.1, 0.3) # Thin long fish
-			var fm_mat = StandardMaterial3D.new()
-			fm_mat.albedo_color = Color(0.2, 0.3, 0.8, 0.6) # Transparent blue
-			fm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			f_mesh.material = fm_mat
-			fish.draw_pass_1 = f_mesh
-			fish.process_material = f_mat
-
-		underwater_effect.visible = false
-		# Ensure it covers screen
-		underwater_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
-
-func _setup_climb_cast():
-	climb_cast = ShapeCast3D.new()
-	add_child(climb_cast)
-	climb_cast.shape = CylinderShape3D.new()
-	climb_cast.shape.radius = 0.5
-	climb_cast.shape.height = 1.0
-	climb_cast.position = Vector3(0, 1.0, 0) # Chest height
-	climb_cast.target_position = Vector3(0, 0, -0.8) # Forward cast
-	climb_cast.max_results = 1
-	climb_cast.collision_mask = 1 # Terrain layer usually 1
-	climb_cast.enabled = true
-
-func _unhandled_input(event):
-	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * SENSITIVITY)
-		camera.rotate_x(-event.relative.y * SENSITIVITY)
-		camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-90), deg_to_rad(90))
-
-# Cheat Modes
-var fly_mode = false
-var noclip_mode = false
-
-func toggle_fly_mode():
-	fly_mode = not fly_mode
-	if not fly_mode: noclip_mode = false # turning off fly turns off noclip
-	if not fly_mode:
-		collision_mask = 1 # Reset collision
-	
-	if fly_mode:
-		velocity = Vector3.ZERO
-
-func toggle_noclip_mode():
-	noclip_mode = not noclip_mode
-	fly_mode = noclip_mode # noclip implies fly
-	
-	if noclip_mode:
-		collision_mask = 0 # No collision
-	else:
-		collision_mask = 1
-
-func _physics_process(delta):
-	if fly_mode:
-		_handle_fly_movement(delta)
-	else:
-		# Check water depth
-		# If head is below water level -> Swimming
-		if global_position.y + 1.2 < WATER_LEVEL: # 1.2 approx chest/neck height
-			is_swimming = true
-		else:
-			is_swimming = false
-		
-		if underwater_effect:
-			underwater_effect.visible = is_swimming
-			var bubbles = camera.get_node_or_null("Bubbles3D")
-			if bubbles: bubbles.emitting = is_swimming
-			
-			var fish = get_node_or_null("Fish3D")
-			if fish: fish.emitting = is_swimming
-			
-			# Dynamic Vison (Speed Effect)
-			var blue_tint = underwater_effect.get_node("BlueTint")
-			if blue_tint and blue_tint.material is ShaderMaterial:
-				var mat = blue_tint.material as ShaderMaterial
-				
-				var speed_ratio = 0.0
-				if velocity.length() > 0.1:
-					speed_ratio = clamp(velocity.length() / SWIM_SPEED, 0.0, 1.0)
-					if Input.is_action_pressed("sprint"): # Allow overdriving for sprint
-						speed_ratio = clamp(velocity.length() / (SWIM_SPEED * 1.5), 0.0, 1.2)
-				
-				# Lerp values based on speed
-				# Vignette: 0.4 -> 0.7 (Darker edges)
-				# Wobble Amount: 0.05 -> 0.02 (Less wobble when fast? Or more? "Recalls vision" might mean tunnel. Let's do More wobble frequency but tighter.)
-				# Be creative: Fast = High Aberration + High Vignette
-				
-				var target_vignette = lerp(0.4, 0.85, speed_ratio)
-				var target_aberration = lerp(0.0, 2.5, speed_ratio)
-				var target_speed = lerp(2.0, 6.0, speed_ratio)
-				var target_amount = lerp(1.0, 3.0, speed_ratio) # Wobble strength increases with speed
-				
-				# Smooth transition
-				var current_vignette = mat.get_shader_parameter("vignete_intensity")
-				if current_vignette == null: current_vignette = 0.4
-				
-				var current_aberration = mat.get_shader_parameter("aberration")
-				if current_aberration == null: current_aberration = 0.0
-				
-				var current_speed = mat.get_shader_parameter("speed")
-				if current_speed == null: current_speed = 2.0
-				
-				var current_amount = mat.get_shader_parameter("amount")
-				if current_amount == null: current_amount = 1.0
-				
-				mat.set_shader_parameter("vignete_intensity", lerp(float(current_vignette), target_vignette, delta * 5.0))
-				mat.set_shader_parameter("aberration", lerp(float(current_aberration), target_aberration, delta * 5.0))
-				mat.set_shader_parameter("speed", lerp(float(current_speed), target_speed, delta * 2.0))
-				mat.set_shader_parameter("amount", lerp(float(current_amount), target_amount, delta * 5.0))
-		
-		# Oxygen logic
-		if is_swimming:
-			oxygen -= OXYGEN_DEPLETION_RATE * delta
-			if oxygen < 0:
-				oxygen = 0
-				take_damage(10.0 * delta) # Drowning damage
-		else:
-			oxygen += OXYGEN_REGEN_RATE * delta
-			if oxygen > MAX_OXYGEN: oxygen = MAX_OXYGEN
+# Node references
+@onready var camera_pivot: Node3D = $CameraPivot
+@onready var camera: Camera3D = $CameraPivot/Camera3D
 
 
+func _ready() -> void:
+	current_stamina = max_stamina
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	camera.position.z = camera_distance
+	target_camera_distance = camera_distance
+	camera.fov = third_person_fov
 
-		if is_swimming:
-			_handle_swimming_movement(delta)
-		else:
-			var is_climbing = false
-			if not is_on_floor():
-				# Check for climbing
-				if Input.is_action_pressed("move_forward") and climb_cast.is_colliding():
-					is_climbing = true
-			
-			if is_climbing:
-				_handle_climb_movement(delta)
-			else:
-				_handle_standard_movement(delta)
 
-func _handle_climb_movement(delta):
-	# Climbing Logic (Blue Zone)
-	velocity.y = CLIMB_SPEED
-	
-	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
-	var direction = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	
-	if direction:
-		velocity.x = direction.x * CLIMB_HORIZONTAL_SPEED
-		velocity.z = direction.z * CLIMB_HORIZONTAL_SPEED
-		
-	_handle_controller_look(delta)
+func _physics_process(delta: float) -> void:
+	_apply_gravity(delta)
+	_handle_movement(delta)
+	_handle_jump()
 	move_and_slide()
+	_handle_stamina_regen(delta)
+	_update_camera_position(delta)
 
-func _handle_standard_movement(delta):
-	# Add the gravity.
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_handle_camera_rotation(event)
+		get_viewport().set_input_as_handled()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	_handle_camera_toggle(event)
+	
+	if event.is_action_pressed("ui_cancel"):
+		_toggle_mouse_capture()
+
+
+func _apply_gravity(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 
-	# Handle Jump.
-	if Input.is_action_just_pressed("jump") and is_on_floor():
-		velocity.y = JUMP_VELOCITY
-	
-	# Handle Sprint
-	var current_speed = WALK_SPEED
-	if Input.is_action_pressed("sprint"):
-		current_speed = SPRINT_SPEED
 
-	# Get the input direction and handle the movement/deceleration.
-	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
-	var direction = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
+func _handle_movement(delta: float) -> void:
+	var input_dir := Vector2.ZERO
+	input_dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+	input_dir.y = Input.get_action_strength("move_backward") - Input.get_action_strength("move_forward")
 	
-	if direction:
-		velocity.x = direction.x * current_speed
-		velocity.z = direction.z * current_speed
+	if input_dir.length() > 1.0:
+		input_dir = input_dir.normalized()
+	
+	var direction := Vector3.ZERO
+	direction.x = input_dir.x
+	direction.z = input_dir.y
+	direction = global_transform.basis * direction
+	direction.y = 0.0
+	
+	# Handle sprinting
+	var wants_sprint := Input.is_action_pressed("sprint") and direction.length() > 0.0
+	if wants_sprint and current_stamina > 0.0:
+		is_sprinting = true
+		_consume_stamina(sprint_stamina_cost * delta)
 	else:
-		velocity.x = move_toward(velocity.x, 0, current_speed)
-		velocity.z = move_toward(velocity.z, 0, current_speed)
-		
-	# Controller Look (Right Stick)
-	_handle_controller_look(delta)
+		is_sprinting = false
 	
-	move_and_slide()
+	var target_speed := sprint_speed if is_sprinting else walk_speed
 	
-	# Anti-Stuck Mechanism
-	_check_and_unstick(delta, input_dir)
-
-func _handle_swimming_movement(delta):
-	# Movement similar to fly mode but slower and with buoyancy
-	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
-	var direction = (camera.global_transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	
-	# Swimming Up (Space) / Down (Ctrl - optional, or just camera look)
-	if Input.is_action_pressed("jump"): # Space to ascend
-		direction.y += 0.8
-	
-	# If not moving down, apply buoyancy (float up)
-	# Only if not trying to dive
-	if direction.y > -0.1 and global_position.y < WATER_LEVEL - 0.5:
-		velocity.y += BUOYANCY * delta
-		velocity.y = min(velocity.y, 2.0) # Cap upward drift
-	
-	if direction:
-		velocity = velocity.lerp(direction * SWIM_SPEED, delta * 2.0)
+	if direction.length() > 0.0:
+		var target_velocity := direction.normalized() * target_speed
+		velocity.x = lerp(velocity.x, target_velocity.x, acceleration * delta)
+		velocity.z = lerp(velocity.z, target_velocity.z, acceleration * delta)
 	else:
-		velocity = velocity.lerp(Vector3(0, velocity.y, 0), delta * 1.0) # Drag
+		velocity.x = lerp(velocity.x, 0.0, friction * delta)
+		velocity.z = lerp(velocity.z, 0.0, friction * delta)
+
+
+func _handle_jump() -> void:
+	if Input.is_action_just_pressed("jump") and is_on_floor() and current_stamina >= jump_stamina_cost:
+		velocity.y = jump_velocity
+		_consume_stamina(jump_stamina_cost)
+
+
+func _handle_stamina_regen(delta: float) -> void:
+	if stamina_regen_timer > 0.0:
+		stamina_regen_timer -= delta
+	elif current_stamina < max_stamina:
+		current_stamina += stamina_regen_rate * delta
+		current_stamina = clampf(current_stamina, 0.0, max_stamina)
+
+
+func _handle_camera_rotation(event: InputEventMouseMotion) -> void:
+	rotation.y -= event.relative.x * mouse_sensitivity
+	camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
 	
-	_handle_controller_look(delta)
-	move_and_slide()
-
-# Anti-Stuck variables
-var _last_position: Vector3 = Vector3.ZERO
-var _stuck_timer: float = 0.0
-const STUCK_THRESHOLD: float = 0.3  # seconds of being stuck before nudge
-const NUDGE_FORCE: float = 2.0
-
-func _check_and_unstick(delta: float, input_dir: Vector2):
-	# Only check if player is trying to move
-	if input_dir.length() > 0.1:
-		var current_pos = global_position
-		var distance_moved = current_pos.distance_to(_last_position)
-		
-		# If barely moved despite trying
-		if distance_moved < 0.05:
-			_stuck_timer += delta
-			if _stuck_timer > STUCK_THRESHOLD:
-				# Nudge player upward to escape geometry
-				global_position.y += NUDGE_FORCE * delta * 10.0
-				_stuck_timer = 0.0
-		else:
-			_stuck_timer = 0.0
-		
-		_last_position = current_pos
+	var current_min_pitch: float
+	var current_max_pitch: float
+	if current_camera_mode == CameraMode.FIRST_PERSON:
+		current_min_pitch = first_person_min_pitch
+		current_max_pitch = first_person_max_pitch
 	else:
-		_stuck_timer = 0.0
-		_last_position = global_position
-
-func _handle_fly_movement(delta):
-	var speed = SPRINT_SPEED * 2.0 if Input.is_action_pressed("sprint") else SPRINT_SPEED
+		current_min_pitch = min_pitch
+		current_max_pitch = max_pitch
 	
-	var input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
-	var direction = (camera.global_transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	
-	# Vertical movement with Jump/Crouch (Space/Ctrl or similar)
-	if Input.is_action_pressed("jump"):
-		direction.y += 1.0
-	# We don't have a crouch action mapped yet, let's just use camera pitch components for now in "direction"
-	
-	if direction:
-		velocity = direction * speed
-	else:
-		velocity = Vector3.ZERO
-		
-	_handle_controller_look(delta)
-	move_and_slide()
-
-func _handle_controller_look(delta):
-	# Simple Right Stick support (Axes 2 and 3 usually)
-	var look_vector = Vector2(
-		Input.get_joy_axis(0, JOY_AXIS_RIGHT_X),
-		Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+	camera_pivot.rotation.x = clampf(
+		camera_pivot.rotation.x,
+		deg_to_rad(current_min_pitch),
+		deg_to_rad(current_max_pitch)
 	)
-	
-	if look_vector.length() > 0.1:
-		rotate_y(-look_vector.x * JOY_SENSITIVITY * delta)
-		camera.rotate_x(-look_vector.y * JOY_SENSITIVITY * delta)
-		camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-90), deg_to_rad(90))
 
-func take_damage(amount: float):
-	if god_mode: return
-	
-	health -= amount
-	if health <= 0:
-		health = 0
-		die()
 
-func heal(amount: float):
-	health += amount
-	if health > MAX_HEALTH: health = MAX_HEALTH
-	# Also restore oxygen
-	oxygen = MAX_OXYGEN
+func _toggle_mouse_capture() -> void:
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-func die():
-	# TODO: Proper death handling (ragdoll, respawn screen, etc.)
-	# For now, just respawn
-	global_position = Vector3(0, 100, 0)
-	velocity = Vector3.ZERO
-	health = MAX_HEALTH
-	oxygen = MAX_OXYGEN
-	print("Player died and respawned.")
+
+func _handle_camera_toggle(event: InputEvent) -> void:
+	if event.is_action_pressed("toggle_camera_view"):
+		if current_camera_mode == CameraMode.THIRD_PERSON:
+			current_camera_mode = CameraMode.FIRST_PERSON
+			target_camera_distance = first_person_distance
+			camera.fov = first_person_fov
+		else:
+			current_camera_mode = CameraMode.THIRD_PERSON
+			target_camera_distance = camera_distance
+			camera.fov = third_person_fov
+
+
+func _update_camera_position(delta: float) -> void:
+	camera.position.z = lerp(camera.position.z, target_camera_distance, camera_transition_speed * delta)
+
+
+func _consume_stamina(amount: float) -> void:
+	current_stamina -= amount
+	current_stamina = clampf(current_stamina, 0.0, max_stamina)
+	stamina_regen_timer = stamina_regen_delay
+
+
+# Public API for future HUD and tool integration
+func get_stamina() -> float:
+	return current_stamina
+
+
+func get_max_stamina() -> float:
+	return max_stamina
+
+
+func consume_stamina(amount: float) -> bool:
+	if current_stamina >= amount:
+		_consume_stamina(amount)
+		return true
+	return false
+
+
+func get_camera() -> Camera3D:
+	return camera

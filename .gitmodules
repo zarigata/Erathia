@@ -1,4 +1,0 @@
-[submodule "addons/zylann.voxel"]
-	path = addons/zylann.voxel
-	url = https://github.com/Zylann/godot_voxel.git
-	branch = gdextension
