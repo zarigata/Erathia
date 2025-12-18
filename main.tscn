@@ -1,9 +1,11 @@
-[gd_scene load_steps=10 format=3 uid="uid://c3jsikgd7vfdp"]
+[gd_scene load_steps=12 format=3 uid="uid://c3jsikgd7vfdp"]
 
 [ext_resource type="Material" path="res://_assets/materials/smooth_surface.tres" id="2_material"]
-[ext_resource type="Script" uid="uid://dhvcrqkmyjw5x" path="res://_engine/terrain/ore_generator.gd" id="3_generator_script"]
+[ext_resource type="Script" uid="uid://dhvcrqkmyjw5x" path="res://_engine/terrain/biome_generator.gd" id="3_generator_script"]
 [ext_resource type="PackedScene" uid="uid://bqx8k2m7v4yjr" path="res://_player/player.tscn" id="3_vyou2"]
 [ext_resource type="PackedScene" uid="uid://dh3xqk7m2yqvs" path="res://_ui/hud.tscn" id="4_hud"]
+[ext_resource type="Script" path="res://_engine/terrain/main_terrain_init.gd" id="5_terrain_init"]
+[ext_resource type="PackedScene" uid="uid://dkm7xvw2q8pnf" path="res://_ui/inventory_ui.tscn" id="5_inv_ui"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.4, 0.6, 0.9, 1)
@@ -25,13 +27,15 @@ fog_light_color = Color(0.7, 0.8, 0.9, 1)
 fog_density = 0.001
 fog_sky_affect = 0.5
 
-[sub_resource type="VoxelGeneratorScript" id="OreGenerator_instance"]
+[sub_resource type="VoxelGeneratorScript" id="BiomeGenerator_instance"]
 script = ExtResource("3_generator_script")
 
 [sub_resource type="VoxelMesherTransvoxel" id="VoxelMesherTransvoxel_mesher"]
 texturing_mode = 1
 
 [node name="Main" type="Node3D"]
+script = ExtResource("5_terrain_init")
+terrain_path = NodePath("VoxelLodTerrain")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_main")
@@ -46,7 +50,7 @@ lod_distance = 32.0
 material = ExtResource("2_material")
 collision_lod_count = 2
 run_stream_in_editor = false
-generator = SubResource("OreGenerator_instance")
+generator = SubResource("BiomeGenerator_instance")
 mesher = SubResource("VoxelMesherTransvoxel_mesher")
 
 [node name="Player" type="CharacterBody3D" parent="." instance=ExtResource("3_vyou2")]
@@ -54,3 +58,5 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
 
 [node name="HUD" parent="." instance=ExtResource("4_hud")]
 player_path = NodePath("../Player")
+
+[node name="InventoryUI" parent="." instance=ExtResource("5_inv_ui")]

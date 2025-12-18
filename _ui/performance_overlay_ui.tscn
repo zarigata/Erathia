@@ -1,0 +1,63 @@
+[gd_scene load_steps=3 format=3 uid="uid://dh7m2qk4xvpnr"]
+
+[ext_resource type="Script" path="res://_ui/performance_overlay_ui.gd" id="1_overlay"]
+[ext_resource type="Script" path="res://_ui/fps_graph.gd" id="2_graph"]
+
+[node name="PerformanceOverlayUI" type="CanvasLayer"]
+layer = 99
+script = ExtResource("1_overlay")
+
+[node name="Panel" type="PanelContainer" parent="."]
+visible = false
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -220.0
+offset_bottom = 220.0
+grow_horizontal = 0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Performance"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="FPSLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "FPS: 0"
+
+[node name="FrameTimeLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Frame: 0.00 ms"
+
+[node name="MemoryLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Memory: 0.0 MB"
+
+[node name="DrawCallsLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Draw Calls: 0"
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="PositionLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Pos: (0.0, 0.0, 0.0)"
+
+[node name="BiomeLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Biome: Unknown"
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="FPSGraph" type="Control" parent="Panel/VBoxContainer"]
+custom_minimum_size = Vector2(200, 60)
+layout_mode = 2
+script = ExtResource("2_graph")

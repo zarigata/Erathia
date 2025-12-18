@@ -1,6 +1,8 @@
-[gd_scene load_steps=5 format=3 uid="uid://bqx8k2m7v4yjr"]
+[gd_scene load_steps=7 format=3 uid="uid://bqx8k2m7v4yjr"]
 
 [ext_resource type="Script" path="res://_player/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://_player/tools/tool_manager.gd" id="2_tool_manager"]
+[ext_resource type="Script" path="res://_player/tools/tool_feedback.gd" id="3_tool_feedback"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_collision"]
 radius = 0.4
@@ -32,3 +34,12 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 3)
 
 [node name="VoxelViewer" type="VoxelViewer" parent="CameraPivot/Camera3D"]
+
+[node name="ToolManager" type="Node" parent="."]
+script = ExtResource("2_tool_manager")
+terrain_edit_distance = 10.0
+
+[node name="ToolFeedback" type="Node" parent="."]
+script = ExtResource("3_tool_feedback")
+show_feedback_messages = true
+feedback_message_duration = 1.5
