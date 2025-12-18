@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://c3jsikgd7vfdp"]
+[gd_scene load_steps=16 format=3 uid="uid://c3jsikgd7vfdp"]
 
 [ext_resource type="Material" path="res://_assets/materials/smooth_surface.tres" id="2_material"]
 [ext_resource type="Script" uid="uid://dhvcrqkmyjw5x" path="res://_engine/terrain/biome_generator.gd" id="3_generator_script"]
@@ -6,6 +6,10 @@
 [ext_resource type="PackedScene" uid="uid://dh3xqk7m2yqvs" path="res://_ui/hud.tscn" id="4_hud"]
 [ext_resource type="Script" path="res://_engine/terrain/main_terrain_init.gd" id="5_terrain_init"]
 [ext_resource type="PackedScene" uid="uid://dkm7xvw2q8pnf" path="res://_ui/inventory_ui.tscn" id="5_inv_ui"]
+[ext_resource type="PackedScene" uid="uid://c5qxvk8m3yxkd" path="res://_ui/dev_console_ui.tscn" id="6_dev_console"]
+[ext_resource type="PackedScene" uid="uid://dh7m2qk4xvpnr" path="res://_ui/performance_overlay_ui.tscn" id="7_perf_overlay"]
+[ext_resource type="PackedScene" uid="uid://bvk3m8qr2ypxd" path="res://_ui/cheat_indicators.tscn" id="8_cheat_indicators"]
+[ext_resource type="PackedScene" uid="uid://c2xk8m4qr3ypnd" path="res://_ui/debug_settings.tscn" id="9_debug_settings"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.4, 0.6, 0.9, 1)
@@ -60,3 +64,11 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
 player_path = NodePath("../Player")
 
 [node name="InventoryUI" parent="." instance=ExtResource("5_inv_ui")]
+
+[node name="DevConsoleUI" parent="." instance=ExtResource("6_dev_console")]
+
+[node name="PerformanceOverlayUI" parent="." instance=ExtResource("7_perf_overlay")]
+
+[node name="CheatIndicators" parent="." instance=ExtResource("8_cheat_indicators")]
+
+[node name="DebugSettings" parent="." instance=ExtResource("9_debug_settings")]

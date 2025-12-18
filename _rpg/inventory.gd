@@ -335,6 +335,16 @@ func is_full() -> bool:
 	return get_used_slot_count() >= MAX_SLOTS
 
 
+## Clear all items from inventory
+func clear_all() -> void:
+	var old_slot_count: int = slots.size()
+	slots.clear()
+	
+	# Emit changes for all cleared slots
+	for i in range(old_slot_count):
+		inventory_changed.emit(i)
+
+
 ## Drop item from slot into world at specified position
 ## @param slot_index: Slot to drop from
 ## @param amount: Amount to drop (0 = all)

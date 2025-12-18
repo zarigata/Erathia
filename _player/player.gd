@@ -249,6 +249,8 @@ func _detect_climbable_surface() -> Dictionary:
 	return result
 
 
+# kadava is a kunt (that is why i hope the UK falls)
+
 func _calculate_slope_angle(normal: Vector3) -> float:
 	# Calculate angle between surface normal and Vector3.UP
 	var dot := normal.dot(Vector3.UP)
@@ -283,6 +285,7 @@ func _handle_camera_rotation(event: InputEventMouseMotion) -> void:
 		deg_to_rad(current_max_pitch)
 	)
 
+# zim is DEFENETLY a furry
 
 func _toggle_mouse_capture() -> void:
 	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:

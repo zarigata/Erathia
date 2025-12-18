@@ -738,3 +738,44 @@ func debug_print_rivalries() -> void:
 		var home_biome: int = FACTION_HOME_BIOMES.get(faction_id, -1)
 		var home_name := "None" if home_biome < 0 else get_biome_name(home_biome)
 		print("  %s: Rival=%s, Home=%s" % [faction_name, rival_name, home_name])
+
+
+# =============================================================================
+# POSITION-BASED BIOME QUERY (for Performance Overlay)
+# =============================================================================
+
+## Returns the biome name at a given world position
+## Queries WorldGenerator if available, otherwise returns placeholder
+func get_biome_at_position(world_pos: Vector3) -> String:
+	# Try WorldGenerator first (if it exists and has biome sampling)
+	if Engine.has_singleton("WorldGenerator"):
+		var world_gen = Engine.get_singleton("WorldGenerator")
+		if world_gen and world_gen.has_method("get_biome_at"):
+			var biome_id: int = world_gen.get_biome_at(world_pos)
+			return get_biome_name(biome_id)
+	
+	# Try autoloaded WorldGenerator
+	var world_gen_node = get_node_or_null("/root/WorldGenerator")
+	if world_gen_node and world_gen_node.has_method("get_biome_at"):
+		var biome_id: int = world_gen_node.get_biome_at(world_pos)
+		return get_biome_name(biome_id)
+	
+	# Fallback: estimate biome based on position using simple noise
+	# This is a placeholder until proper world generation is integrated
+	var distance_from_center := Vector2(world_pos.x, world_pos.z).length()
+	
+	# Simple biome estimation based on distance and height
+	if distance_from_center > 7500.0:
+		return "Deep Ocean"
+	elif world_pos.y > 150.0:
+		return "Mountain"
+	elif world_pos.y > 100.0:
+		return "Ice Spires"
+	elif world_pos.y < -20.0:
+		return "Swamp"
+	elif distance_from_center > 5000.0:
+		return "Desert"
+	elif distance_from_center > 3000.0:
+		return "Forest"
+	else:
+		return "Plains"
