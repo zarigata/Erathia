@@ -8,7 +8,8 @@ var _is_active: bool = false
 var _label_cache: Dictionary = {}  # node instance_id -> Label3D
 var _update_timer: float = 0.0
 const UPDATE_INTERVAL: float = 0.5
-const MAX_DISTANCE: float = 50.0
+var _max_distance: float = 50.0
+const MAX_DISTANCE: float = 50.0  # Default
 
 var _info_label: Label3D = null
 
@@ -66,7 +67,7 @@ func _update_raycast_info() -> void:
 	
 	# Raycast from camera
 	var from := camera.global_position
-	var to := from + (-camera.global_transform.basis.z) * MAX_DISTANCE
+	var to := from + (-camera.global_transform.basis.z) * _max_distance
 	
 	var space_state := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, to)
@@ -119,3 +120,8 @@ func _update_raycast_info() -> void:
 		_info_label.modulate = Color.YELLOW
 	else:
 		_info_label.modulate = Color.WHITE
+
+
+## Apply settings from debug settings panel
+func apply_settings(settings: Dictionary) -> void:
+	_max_distance = settings.get("xray_label_distance", MAX_DISTANCE)

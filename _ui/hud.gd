@@ -18,6 +18,11 @@ const TOOL_MESSAGE_DURATION: float = 2.0
 var inventory_hint_timer: float = 10.0
 const INVENTORY_HINT_DURATION: float = 10.0
 
+# Resource display fade timer
+var resource_display_timer: float = 0.0
+const RESOURCE_DISPLAY_DURATION: float = 3.0
+const RESOURCE_DISPLAY_FADE: float = 1.0
+
 
 func _ready() -> void:
 	if player_path:
@@ -39,6 +44,11 @@ func _ready() -> void:
 		var tool_manager = player.get_node_or_null("ToolManager")
 		if tool_manager:
 			tool_manager.tool_action_failed.connect(_on_tool_action_failed)
+		
+		# Connect to ToolFeedback signals if available
+		var tool_feedback = player.get_node_or_null("ToolFeedback")
+		if tool_feedback:
+			tool_feedback.feedback_message.connect(_on_feedback_message)
 	
 	# Set crosshair visibility
 	crosshair.visible = show_crosshair
@@ -46,6 +56,7 @@ func _ready() -> void:
 	# Initialize tool message label
 	if tool_message_label:
 		tool_message_label.visible = false
+		tool_message_label.modulate.a = 1.0
 	
 	# Initialize climbing indicator
 	if climbing_indicator:
@@ -56,8 +67,10 @@ func _ready() -> void:
 		Inventory.inventory_changed.connect(_on_inventory_changed)
 		Inventory.item_added.connect(_on_item_added)
 	
-	# Initialize resource display
+	# Initialize resource display (hidden by default, shows on inventory change)
 	_update_resource_display()
+	if resource_display:
+		resource_display.visible = false
 	
 	# Initialize inventory hint
 	if inventory_hint:
@@ -75,11 +88,19 @@ func _process(delta: float) -> void:
 	stamina_bar.max_value = maximum
 	stamina_bar.value = current
 	
-	# Update tool message timer
+	# Update tool message timer with fade-out
 	if tool_message_timer > 0.0:
 		tool_message_timer -= delta
-		if tool_message_timer <= 0.0 and tool_message_label:
-			tool_message_label.visible = false
+		if tool_message_label:
+			# Fade out during last 0.5 seconds
+			if tool_message_timer <= 0.5:
+				tool_message_label.modulate.a = tool_message_timer / 0.5
+			else:
+				tool_message_label.modulate.a = 1.0
+			
+			if tool_message_timer <= 0.0:
+				tool_message_label.visible = false
+				tool_message_label.modulate.a = 1.0
 	
 	# Update climbing indicator
 	if climbing_indicator:
@@ -94,6 +115,19 @@ func _process(delta: float) -> void:
 		if inventory_hint_timer <= 0.0 and inventory_hint:
 			inventory_hint.visible = false
 	
+	# Update resource display timer with fade-out
+	if resource_display_timer > 0.0:
+		resource_display_timer -= delta
+		if resource_display:
+			if resource_display_timer <= RESOURCE_DISPLAY_FADE:
+				resource_display.modulate.a = resource_display_timer / RESOURCE_DISPLAY_FADE
+			else:
+				resource_display.modulate.a = 1.0
+			
+			if resource_display_timer <= 0.0:
+				resource_display.visible = false
+				resource_display.modulate.a = 1.0
+	
 	# Update pickup prompt
 	_update_pickup_prompt()
 
@@ -105,18 +139,45 @@ func update_health(current: float, maximum: float) -> void:
 
 
 func _on_tool_action_failed(_tool: Variant, reason: String) -> void:
+	_show_tool_message(reason, "error")
+
+
+func _on_feedback_message(message: String, message_type: String) -> void:
+	_show_tool_message(message, message_type)
+
+
+func _show_tool_message(message: String, message_type: String = "info") -> void:
 	if tool_message_label:
-		tool_message_label.text = reason
+		tool_message_label.text = message
 		tool_message_label.visible = true
+		tool_message_label.modulate.a = 1.0
 		tool_message_timer = TOOL_MESSAGE_DURATION
+		
+		# Color based on message type
+		match message_type:
+			"error":
+				tool_message_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+			"warning":
+				tool_message_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+			_:  # info
+				tool_message_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 
 
 func _on_inventory_changed(_slot_index: int) -> void:
 	_update_resource_display()
+	_show_resource_display()
 
 
 func _on_item_added(_resource_type: String, _amount: int) -> void:
 	_update_resource_display()
+	_show_resource_display()
+
+
+func _show_resource_display() -> void:
+	if resource_display:
+		resource_display.visible = true
+		resource_display.modulate.a = 1.0
+		resource_display_timer = RESOURCE_DISPLAY_DURATION
 
 
 func _update_resource_display() -> void:

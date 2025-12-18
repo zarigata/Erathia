@@ -24,6 +24,7 @@ MiningSystem="*res://_engine/mining/mining_system.gd"
 Inventory="*res://_rpg/inventory.gd"
 DevConsole="*res://_core/dev_console.gd"
 PerformanceOverlay="*res://_core/performance_overlay.gd"
+VegetationManager="*res://_world/vegetation/vegetation_manager.gd"
 
 [editor_plugins]
 

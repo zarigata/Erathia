@@ -27,6 +27,11 @@ func _ready() -> void:
 	
 	_load_settings()
 	_apply_settings_to_ui()
+	_apply_settings_to_tools()
+	
+	# Register settings command with DevConsole
+	if DevConsole:
+		DevConsole.register_command("settings", _cmd_settings, "Open/close debug settings panel")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -111,44 +116,105 @@ func get_setting(key: String) -> Variant:
 func _on_font_size_changed(value: float) -> void:
 	_settings.console_font_size = int(value)
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_history_length_changed(value: float) -> void:
 	_settings.console_history_length = int(value)
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_autocomplete_toggled(toggled_on: bool) -> void:
 	_settings.console_autocomplete = toggled_on
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_update_rate_changed(value: float) -> void:
 	_settings.overlay_update_rate = value
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_show_graph_toggled(toggled_on: bool) -> void:
 	_settings.overlay_show_graph = toggled_on
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_label_distance_changed(value: float) -> void:
 	_settings.xray_label_distance = value
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_transparency_changed(value: float) -> void:
 	_settings.xray_transparency = value
 	_save_settings()
+	_apply_settings_to_tools()
 	settings_changed.emit()
 
 
 func _on_close_pressed() -> void:
 	_toggle_panel()
+
+
+## Toggle panel visibility (public for console command)
+func toggle_panel() -> void:
+	_toggle_panel()
+
+
+## Console command handler
+func _cmd_settings(args: Array[String]) -> String:
+	_toggle_panel()
+	return "Debug settings panel: %s" % ("opened" if _visible else "closed")
+
+
+## Apply current settings to all debug tools
+func _apply_settings_to_tools() -> void:
+	# Apply to DevConsoleUI
+	var console_ui := _find_dev_console_ui()
+	if console_ui:
+		console_ui.apply_settings(_settings)
+	
+	# Apply to PerformanceOverlay
+	if PerformanceOverlay:
+		PerformanceOverlay.apply_settings(_settings)
+	
+	# Apply to PerformanceOverlayUI
+	var perf_ui := _find_performance_overlay_ui()
+	if perf_ui:
+		perf_ui.apply_settings(_settings)
+	
+	# Apply to XRayManager and NodeInspector
+	if DevConsole and DevConsole.xray_manager:
+		DevConsole.xray_manager.apply_settings(_settings)
+
+
+func _find_dev_console_ui() -> Node:
+	var nodes := get_tree().get_nodes_in_group("dev_console_ui")
+	if nodes.size() > 0:
+		return nodes[0]
+	# Fallback: search by class
+	for node in get_tree().root.get_children():
+		if node.has_method("apply_settings") and node.name.contains("Console"):
+			return node
+	return null
+
+
+func _find_performance_overlay_ui() -> Node:
+	var nodes := get_tree().get_nodes_in_group("performance_overlay_ui")
+	if nodes.size() > 0:
+		return nodes[0]
+	# Fallback: search by class
+	for node in get_tree().root.get_children():
+		if node.has_method("apply_settings") and node.name.contains("Performance"):
+			return node
+	return null

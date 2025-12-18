@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://c3jsikgd7vfdp"]
+[gd_scene load_steps=18 format=3 uid="uid://c3jsikgd7vfdp"]
 
 [ext_resource type="Material" path="res://_assets/materials/smooth_surface.tres" id="2_material"]
 [ext_resource type="Script" uid="uid://dhvcrqkmyjw5x" path="res://_engine/terrain/biome_generator.gd" id="3_generator_script"]
@@ -10,6 +10,8 @@
 [ext_resource type="PackedScene" uid="uid://dh7m2qk4xvpnr" path="res://_ui/performance_overlay_ui.tscn" id="7_perf_overlay"]
 [ext_resource type="PackedScene" uid="uid://bvk3m8qr2ypxd" path="res://_ui/cheat_indicators.tscn" id="8_cheat_indicators"]
 [ext_resource type="PackedScene" uid="uid://c2xk8m4qr3ypnd" path="res://_ui/debug_settings.tscn" id="9_debug_settings"]
+[ext_resource type="Script" path="res://_world/vegetation/instancer.gd" id="10_veg_instancer"]
+[ext_resource type="Script" path="res://_world/vegetation/vegetation_debug.gd" id="11_veg_debug"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.4, 0.6, 0.9, 1)
@@ -56,6 +58,12 @@ collision_lod_count = 2
 run_stream_in_editor = false
 generator = SubResource("BiomeGenerator_instance")
 mesher = SubResource("VoxelMesherTransvoxel_mesher")
+
+[node name="VegetationInstancer" type="Node" parent="VoxelLodTerrain"]
+script = ExtResource("10_veg_instancer")
+
+[node name="VegetationDebug" type="Node" parent="VoxelLodTerrain"]
+script = ExtResource("11_veg_debug")
 
 [node name="Player" type="CharacterBody3D" parent="." instance=ExtResource("3_vyou2")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)

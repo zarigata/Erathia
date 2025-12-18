@@ -481,14 +481,24 @@ func _handle_terrain_editing() -> void:
 	if Inventory:
 		Inventory.remove_resource("stone", 1)
 	
+	# For ADD operation, offset position along the surface normal
+	# This places new voxels on top of existing terrain, not inside it
+	var build_position: Vector3 = Vector3(hit.position)
+	if hit.normal.length_squared() > 0.01:
+		# Offset by half the brush radius along the normal to place voxels outside
+		build_position = Vector3(hit.position) + hit.normal * (terrain_brush_radius * 0.5)
+	
 	TerrainEditSystem.apply_brush(
-		hit.position,
+		build_position,
 		TerrainEditSystem.BrushType.SPHERE,
 		TerrainEditSystem.Operation.ADD,
 		terrain_brush_radius,
 		terrain_brush_strength,
 		terrain_tool_tier
 	)
+	
+	if tool_feedback:
+		tool_feedback.show_message("Built terrain")
 
 
 # ============================================================================

@@ -17,7 +17,11 @@ const MAX_SPIKE_LOG: int = 100
 
 # Update rate
 var _update_timer: float = 0.0
-const UPDATE_INTERVAL: float = 0.1  # 10 updates per second
+var _update_interval: float = 0.1  # Configurable via settings
+const UPDATE_INTERVAL: float = 0.1  # 10 updates per second (default)
+
+# Graph visibility
+var _show_graph: bool = true
 
 # Cached metrics
 var _current_metrics: Dictionary = {}
@@ -46,7 +50,7 @@ func _process(delta: float) -> void:
 	if _update_timer > 0.0:
 		return
 	
-	_update_timer = UPDATE_INTERVAL
+	_update_timer = _update_interval
 	_update_metrics()
 
 
@@ -56,16 +60,24 @@ func _update_metrics() -> void:
 		"frame_time": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
 		"physics_time": Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
 		"memory_static": Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0,  # MB
-		"memory_dynamic": Performance.get_monitor(Performance.MEMORY_STATIC_MAX) / 1048576.0,  # MB
+		"memory_static_max": Performance.get_monitor(Performance.MEMORY_STATIC_MAX) / 1048576.0,  # MB (available static memory)
+		"memory_video": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0,  # MB (video memory)
 		"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 		"objects_drawn": Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME),
 		"vertices": Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),
 		"player_position": _get_player_position(),
 		"biome": _get_current_biome(),
-		"fps_history": fps_history.duplicate()
+		"fps_history": fps_history.duplicate(),
+		"show_graph": _show_graph
 	}
 	
 	metrics_updated.emit(_current_metrics)
+
+
+## Apply settings from debug settings panel
+func apply_settings(settings: Dictionary) -> void:
+	_update_interval = settings.get("overlay_update_rate", UPDATE_INTERVAL)
+	_show_graph = settings.get("overlay_show_graph", true)
 
 
 func _get_player_position() -> Vector3:

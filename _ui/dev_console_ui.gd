@@ -14,6 +14,8 @@ extends CanvasLayer
 var _history_index: int = -1
 var _visible: bool = false
 var _previous_mouse_mode: Input.MouseMode = Input.MOUSE_MODE_CAPTURED
+var _autocomplete_enabled: bool = true
+var _max_history_lines: int = 100
 
 const MAX_HISTORY_LINES: int = 100
 
@@ -21,6 +23,9 @@ const MAX_HISTORY_LINES: int = 100
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 100
+	
+	# Add to group for discovery by debug_settings
+	add_to_group("dev_console_ui")
 	
 	panel.visible = false
 	suggestions_popup.visible = false
@@ -143,7 +148,7 @@ func _on_input_changed(new_text: String) -> void:
 
 
 func _update_suggestions(text: String) -> void:
-	if text.is_empty() or not DevConsole:
+	if not _autocomplete_enabled or text.is_empty() or not DevConsole:
 		suggestions_popup.visible = false
 		return
 	
@@ -233,3 +238,19 @@ func _navigate_history(direction: int) -> void:
 	if _history_index >= 0 and _history_index < history.size():
 		input_line.text = history[_history_index]
 		input_line.caret_column = input_line.text.length()
+
+
+## Apply settings from debug settings panel
+func apply_settings(settings: Dictionary) -> void:
+	# Font size for history label
+	var font_size: int = settings.get("console_font_size", 14)
+	if history_label:
+		history_label.add_theme_font_size_override("normal_font_size", font_size)
+		history_label.add_theme_font_size_override("bold_font_size", font_size)
+		history_label.add_theme_font_size_override("mono_font_size", font_size)
+	
+	# History length cap
+	_max_history_lines = settings.get("console_history_length", 100)
+	
+	# Autocomplete toggle
+	_autocomplete_enabled = settings.get("console_autocomplete", true)

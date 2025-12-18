@@ -18,10 +18,13 @@ func _ready() -> void:
 	_setup_node_inspector()
 
 
+var _xray_transparency: float = 0.3
+
+
 func _create_xray_material() -> void:
 	_xray_material = StandardMaterial3D.new()
 	_xray_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_xray_material.albedo_color = Color(0.3, 0.5, 0.8, 0.3)
+	_xray_material.albedo_color = Color(0.3, 0.5, 0.8, _xray_transparency)
 	_xray_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_xray_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
@@ -121,3 +124,17 @@ func get_node_info_at_position(pos: Vector3) -> Dictionary:
 		info["biome"] = BiomeManager.get_biome_at_position(pos)
 	
 	return info
+
+
+## Apply settings from debug settings panel
+func apply_settings(settings: Dictionary) -> void:
+	# Update x-ray transparency
+	_xray_transparency = settings.get("xray_transparency", 0.3)
+	if _xray_material:
+		var color := _xray_material.albedo_color
+		_xray_material.albedo_color = Color(color.r, color.g, color.b, _xray_transparency)
+	
+	# Update node inspector settings
+	var label_distance: float = settings.get("xray_label_distance", 50.0)
+	if node_inspector and node_inspector.has_method("apply_settings"):
+		node_inspector.apply_settings(settings)

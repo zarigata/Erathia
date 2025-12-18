@@ -78,6 +78,11 @@ func _show_message(message: String, message_type: String = "info") -> void:
 	feedback_message.emit(message, message_type)
 
 
+## Public method for external callers (e.g., player.gd)
+func show_message(message: String, message_type: String = "info") -> void:
+	_show_message(message, message_type)
+
+
 func get_current_message() -> String:
 	return current_message
 

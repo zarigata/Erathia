@@ -30,7 +30,13 @@ func _ready() -> void:
 
 
 func _on_cheat_toggled(cheat_name: String, enabled: bool) -> void:
-	if enabled:
+	# For speed cheat, only show badge when multiplier > 1.0
+	if cheat_name == "speed":
+		if enabled and DevConsole and DevConsole.speed_multiplier > 1.0:
+			_show_badge(cheat_name)
+		else:
+			_hide_badge(cheat_name)
+	elif enabled:
 		_show_badge(cheat_name)
 	else:
 		_hide_badge(cheat_name)

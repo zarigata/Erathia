@@ -6,6 +6,12 @@ class_name BiomeGenerator
 ## Modifies terrain height, materials, and ore distribution based on biome type
 
 # =============================================================================
+# SIGNALS
+# =============================================================================
+
+signal chunk_generated(chunk_origin: Vector3i, biome_id: int)
+
+# =============================================================================
 # EXPORT VARIABLES
 # =============================================================================
 
@@ -494,6 +500,10 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 								if fx < block_size.x and fy < block_size.y and fz < block_size.z:
 									out_buffer.set_voxel_f(modified_sdf, fx, fy, fz, VoxelBuffer.CHANNEL_SDF)
 									out_buffer.set_voxel(material_id, fx, fy, fz, VoxelBuffer.CHANNEL_INDICES)
+	
+	# Emit signal for vegetation placement (only at LOD 0 for performance)
+	if lod == 0:
+		chunk_generated.emit(origin, primary_biome)
 
 
 # =============================================================================

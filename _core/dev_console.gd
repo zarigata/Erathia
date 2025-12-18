@@ -59,6 +59,12 @@ func _register_core_commands() -> void:
 	register_command("reload_terrain", _cmd_reload_terrain, "Force terrain regeneration")
 	register_command("cheats", _cmd_cheats, "List all active cheats")
 	register_command("clear", _cmd_clear, "Clear console history")
+	# Vegetation commands
+	register_command("veg_stats", _cmd_veg_stats, "Show vegetation instance statistics")
+	register_command("veg_reload", _cmd_veg_reload, "Reload all vegetation")
+	register_command("veg_toggle", _cmd_veg_toggle, "Toggle vegetation type: veg_toggle <tree|bush|rock|grass>")
+	register_command("veg_show_zones", _cmd_veg_show_zones, "Toggle vegetation placement zone visualization")
+	register_command("veg_clear_cache", _cmd_veg_clear_cache, "Clear vegetation mesh cache")
 
 
 ## Register a new command
@@ -194,8 +200,17 @@ func _cmd_speed(args: Array[String]) -> String:
 	if value <= 0.0:
 		return "Error: Speed must be positive"
 	
+	var old_multiplier := speed_multiplier
 	speed_multiplier = clampf(value, 0.1, 20.0)
-	cheat_toggled.emit("speed", true)
+	
+	# Treat values <= 1.0 as disabling the speed cheat
+	var is_speed_cheat := speed_multiplier > 1.0
+	var was_speed_cheat := old_multiplier > 1.0
+	
+	# Only emit if state changed
+	if is_speed_cheat != was_speed_cheat:
+		cheat_toggled.emit("speed", is_speed_cheat)
+	
 	return "Speed multiplier set to: %.1f" % speed_multiplier
 
 
@@ -327,3 +342,122 @@ func _cmd_cheats(args: Array[String]) -> String:
 
 func _cmd_clear(args: Array[String]) -> String:
 	return "[CLEAR]"
+
+
+# =============================================================================
+# VEGETATION COMMANDS
+# =============================================================================
+
+func _cmd_veg_stats(args: Array[String]) -> String:
+	if not VegetationManager:
+		return "Error: VegetationManager not available"
+	
+	var stats := VegetationManager.get_stats()
+	var lines: Array[String] = [
+		"=== Vegetation Statistics ===",
+		"Total Instances: %d" % stats["total_instances"],
+		"  Trees: %d" % stats["tree_count"],
+		"  Bushes: %d" % stats["bush_count"],
+		"  Rocks: %d" % stats["rock_count"],
+		"  Grass: %d" % stats["grass_count"],
+		"Mesh Cache: %d meshes" % stats["cache_size"],
+		"Cache Hits: %d | Misses: %d" % [stats["cache_hits"], stats["cache_misses"]]
+	]
+	return "\n".join(lines)
+
+
+func _cmd_veg_reload(args: Array[String]) -> String:
+	if not VegetationManager:
+		return "Error: VegetationManager not available"
+	
+	VegetationManager.reload_all_vegetation()
+	
+	# Also reload the instancer if available
+	var instancer := _get_vegetation_instancer()
+	if instancer:
+		instancer.reload_vegetation()
+	
+	return "Vegetation reload triggered"
+
+
+func _cmd_veg_toggle(args: Array[String]) -> String:
+	if args.is_empty():
+		return "Usage: veg_toggle <tree|bush|rock|grass|all>"
+	
+	var instancer := _get_vegetation_instancer()
+	if not instancer:
+		return "Error: VegetationInstancer not found"
+	
+	var type_name := args[0].to_lower()
+	var veg_type: int = -1
+	
+	match type_name:
+		"tree", "trees":
+			veg_type = VegetationManager.VegetationType.TREE
+		"bush", "bushes":
+			veg_type = VegetationManager.VegetationType.BUSH
+		"rock", "rocks":
+			veg_type = VegetationManager.VegetationType.ROCK_SMALL
+		"grass":
+			veg_type = VegetationManager.VegetationType.GRASS_TUFT
+		"all":
+			# Toggle all types using public API
+			for t: int in VegetationManager.VegetationType.values():
+				var type_variants: Dictionary = instancer._multimesh_instances.get(t, {})
+				for variant: String in type_variants.keys():
+					var mmi: MultiMeshInstance3D = type_variants[variant]
+					if mmi:
+						mmi.visible = not mmi.visible
+			return "Toggled all vegetation types"
+		_:
+			return "Error: Unknown type '%s'. Use: tree, bush, rock, grass, all" % type_name
+	
+	if veg_type >= 0:
+		var type_variants: Dictionary = instancer._multimesh_instances.get(veg_type, {})
+		var toggled := false
+		var new_visible := false
+		for variant: String in type_variants.keys():
+			var mmi: MultiMeshInstance3D = type_variants[variant]
+			if mmi:
+				mmi.visible = not mmi.visible
+				new_visible = mmi.visible
+				toggled = true
+		if toggled:
+			return "%s visibility: %s" % [type_name.capitalize(), "ON" if new_visible else "OFF"]
+	
+	return "Error: Could not toggle %s" % type_name
+
+
+func _cmd_veg_show_zones(args: Array[String]) -> String:
+	var debug_node := _get_vegetation_debug()
+	if not debug_node:
+		return "Error: VegetationDebug not found"
+	
+	debug_node.toggle_zones()
+	return "Vegetation zone visualization toggled"
+
+
+func _cmd_veg_clear_cache(args: Array[String]) -> String:
+	if not VegetationManager:
+		return "Error: VegetationManager not available"
+	
+	VegetationManager.clear_mesh_cache()
+	return "Vegetation mesh cache cleared"
+
+
+func _get_vegetation_instancer() -> Node:
+	var root := get_tree().current_scene
+	if root:
+		var terrain := root.get_node_or_null("VoxelLodTerrain")
+		if terrain:
+			return terrain.get_node_or_null("VegetationInstancer")
+	return null
+
+
+func _get_vegetation_debug() -> Node:
+	var root := get_tree().current_scene
+	if root:
+		var terrain := root.get_node_or_null("VoxelLodTerrain")
+		if terrain:
+			return terrain.get_node_or_null("VegetationDebug")
+	return null

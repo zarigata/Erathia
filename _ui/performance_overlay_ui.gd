@@ -20,6 +20,9 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 99
 	
+	# Add to group for discovery by debug_settings
+	add_to_group("performance_overlay_ui")
+	
 	panel.visible = false
 	
 	# Connect to PerformanceOverlay signals
@@ -51,8 +54,9 @@ func _on_metrics_updated(data: Dictionary) -> void:
 	var frame_time: float = data.get("frame_time", 0.0)
 	frame_time_label.text = "Frame: %.2f ms" % frame_time
 	
-	var memory: float = data.get("memory_static", 0.0)
-	memory_label.text = "Memory: %.1f MB" % memory
+	var memory_static: float = data.get("memory_static", 0.0)
+	var memory_video: float = data.get("memory_video", 0.0)
+	memory_label.text = "Memory: %.1f MB (VRAM: %.1f MB)" % [memory_static, memory_video]
 	
 	var draw_calls: float = data.get("draw_calls", 0.0)
 	draw_calls_label.text = "Draw Calls: %d" % int(draw_calls)
@@ -63,8 +67,20 @@ func _on_metrics_updated(data: Dictionary) -> void:
 	var biome: String = data.get("biome", "Unknown")
 	biome_label.text = "Biome: %s" % biome
 	
-	# Trigger graph redraw
-	fps_graph.queue_redraw()
+	# Trigger graph redraw only if enabled
+	var show_graph: bool = data.get("show_graph", true)
+	if show_graph and fps_graph:
+		fps_graph.visible = true
+		fps_graph.queue_redraw()
+	elif fps_graph:
+		fps_graph.visible = false
+
+
+## Apply settings from debug settings panel
+func apply_settings(settings: Dictionary) -> void:
+	var show_graph: bool = settings.get("overlay_show_graph", true)
+	if fps_graph:
+		fps_graph.visible = show_graph
 
 
 func _get_fps_color(fps: float) -> Color:
