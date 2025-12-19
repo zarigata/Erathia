@@ -43,11 +43,12 @@ const RESOURCE_COLORS: Dictionary = {
 }
 
 ## Loot tables mapping material IDs to resource drops (amount per cubic meter)
+## Reduced by 50% for balanced gameplay
 const LOOT_TABLES: Dictionary = {
-	1: {"dirt": 1.0},  # DIRT
-	2: {"stone": 1.5},  # STONE
-	3: {"stone": 0.8, "iron_ore": 0.3},  # IRON_ORE - mixed drops
-	4: {"stone": 0.5, "rare_crystal": 0.1},  # RARE_CRYSTAL - mixed drops
+	1: {"dirt": 0.5},  # DIRT
+	2: {"stone": 0.75},  # STONE
+	3: {"stone": 0.4, "iron_ore": 0.15},  # IRON_ORE - mixed drops
+	4: {"stone": 0.25, "rare_crystal": 0.05},  # RARE_CRYSTAL - mixed drops
 }
 
 ## Minimum volume threshold to spawn drops

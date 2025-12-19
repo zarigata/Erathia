@@ -2,9 +2,10 @@ extends BaseTool
 class_name Pickaxe
 
 @export_group("Pickaxe Settings")
-@export var box_radius: float = 1.0  # 2x2x2 voxel removal
-@export var grid_snap_size: float = 1.0
-@export var dig_strength: float = 5.0
+@export var brush_radius: float = 1.8  # Mining radius - larger for more removal
+@export var dig_strength: float = 10.0  # Higher strength for more terrain removal
+@export var use_smooth_mining: bool = true  # Use sphere brush for smoother edges
+@export var post_smooth_passes: int = 2  # Smoothing passes after mining for cleaner edges
 
 # Last hit material for feedback
 var last_hit_material_id: int = -1
@@ -16,8 +17,9 @@ func _ready() -> void:
 	tool_tier = ToolConstants.ToolTier.STONE
 
 
-func _snap_to_grid(pos: Vector3) -> Vector3:
-	return (pos / grid_snap_size).floor() * grid_snap_size + Vector3(grid_snap_size * 0.5, grid_snap_size * 0.5, grid_snap_size * 0.5)
+func _get_mining_position(pos: Vector3, hit_normal: Vector3) -> Vector3:
+	# Offset slightly into the terrain for better mining results
+	return pos - hit_normal * 0.3
 
 
 func _can_mine_at_position(hit_position: Vector3) -> bool:
@@ -47,6 +49,7 @@ func _use(hit_result: VoxelRaycastResult) -> bool:
 		return false
 	
 	var hit_position := Vector3(hit_result.position)
+	var hit_normal := Vector3(hit_result.previous_position - hit_result.position).normalized()
 	last_hit_position = hit_position
 	
 	# Check material hardness
@@ -64,18 +67,37 @@ func _use(hit_result: VoxelRaycastResult) -> bool:
 		tool_use_failed.emit("Not enough stamina")
 		return false
 	
-	# Snap position to grid for BOX brush
-	var snapped_position := _snap_to_grid(hit_position)
+	# Calculate mining position (slightly inside terrain for better results)
+	var mining_position := _get_mining_position(hit_position, hit_normal)
 	
-	# Apply terrain modification using BOX brush
+	# Choose brush type based on settings
+	var brush_type: int
+	if use_smooth_mining:
+		brush_type = TerrainEditSystem.BrushType.SPHERE
+	else:
+		brush_type = TerrainEditSystem.BrushType.BOX
+	
+	# Apply terrain modification
 	TerrainEditSystem.apply_brush(
-		snapped_position,
-		TerrainEditSystem.BrushType.BOX,
+		mining_position,
+		brush_type,
 		TerrainEditSystem.Operation.SUBTRACT,
-		box_radius,
+		brush_radius,
 		dig_strength,
 		tool_tier
 	)
+	
+	# Apply post-mining smoothing to reduce jagged edges
+	if post_smooth_passes > 0 and use_smooth_mining:
+		for i in range(post_smooth_passes):
+			TerrainEditSystem.apply_brush(
+				mining_position,
+				TerrainEditSystem.BrushType.SPHERE,
+				TerrainEditSystem.Operation.SMOOTH,
+				brush_radius * 1.2,
+				3.0,
+				0
+			)
 	
 	# Reduce durability
 	_reduce_durability(1)
@@ -84,7 +106,7 @@ func _use(hit_result: VoxelRaycastResult) -> bool:
 	_start_cooldown()
 	
 	# Emit success signal
-	tool_used.emit(snapped_position, true)
+	tool_used.emit(mining_position, true)
 	
 	return true
 

@@ -28,12 +28,20 @@ sky_material = SubResource("ProceduralSkyMaterial_sky")
 background_mode = 2
 sky = SubResource("Sky_main")
 ambient_light_source = 2
-ambient_light_sky_contribution = 0.3
-ambient_light_energy = 0.3
+ambient_light_color = Color(0.7, 0.75, 0.85, 1)
+ambient_light_sky_contribution = 0.5
+ambient_light_energy = 0.6
+tonemap_mode = 2
+tonemap_white = 1.2
+ssao_enabled = true
+ssao_radius = 2.0
+ssao_intensity = 1.5
+ssil_enabled = true
+ssil_intensity = 0.5
 fog_enabled = true
 fog_light_color = Color(0.7, 0.8, 0.9, 1)
-fog_density = 0.001
-fog_sky_affect = 0.5
+fog_density = 0.0008
+fog_sky_affect = 0.4
 
 [sub_resource type="VoxelGeneratorScript" id="BiomeGenerator_instance"]
 script = ExtResource("3_generator_script")
@@ -52,7 +60,12 @@ environment = SubResource("Environment_main")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 50, 0)
+light_color = Color(1.0, 0.98, 0.95, 1)
+light_energy = 1.2
+light_indirect_energy = 0.8
 shadow_enabled = true
+shadow_bias = 0.03
+directional_shadow_mode = 1
 
 [node name="VoxelLodTerrain" type="VoxelLodTerrain" parent="."]
 lod_count = 5

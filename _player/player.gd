@@ -450,7 +450,7 @@ func get_camera() -> Camera3D:
 @export var terrain_edit_enabled: bool = true
 @export var terrain_edit_distance: float = 10.0
 @export var terrain_brush_radius: float = 2.0
-@export var terrain_brush_strength: float = 5.0
+@export var terrain_brush_strength: float = 10.0  # Higher for more terrain addition
 @export var terrain_tool_tier: int = 1
 @export var show_raycast_visualization: bool = true
 @export var raycast_update_rate: float = 0.05
@@ -507,7 +507,7 @@ func _handle_terrain_editing() -> void:
 	var build_position: Vector3 = Vector3(hit.position)
 	if hit.normal.length_squared() > 0.01:
 		# Offset by half the brush radius along the normal to place voxels outside
-		build_position = Vector3(hit.position) + hit.normal * (terrain_brush_radius * 0.5)
+		build_position = Vector3(hit.position) + hit.normal * (terrain_brush_radius * 0.3)
 	
 	TerrainEditSystem.apply_brush(
 		build_position,
@@ -516,6 +516,16 @@ func _handle_terrain_editing() -> void:
 		terrain_brush_radius,
 		terrain_brush_strength,
 		terrain_tool_tier
+	)
+	
+	# Apply smoothing pass after building for cleaner results
+	TerrainEditSystem.apply_brush(
+		build_position,
+		TerrainEditSystem.BrushType.SPHERE,
+		TerrainEditSystem.Operation.SMOOTH,
+		terrain_brush_radius * 1.3,
+		3.0,
+		0
 	)
 	
 	if tool_feedback:

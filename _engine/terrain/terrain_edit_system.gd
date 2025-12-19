@@ -39,9 +39,9 @@ enum Operation {
 ## Maximum raycast distance for terrain queries
 @export var default_max_raycast_distance: float = 10.0
 ## Default radius for brush operations
-@export var default_brush_radius: float = 2.0
+@export var default_brush_radius: float = 2.5
 ## Default strength for brush operations
-@export var default_brush_strength: float = 5.0
+@export var default_brush_strength: float = 8.0
 ## Enable debug visualization of edit operations
 @export var enable_debug_visualization: bool = false
 ## Maximum number of operations allowed in a single batch
@@ -294,19 +294,17 @@ func _execute_brush(position: Vector3, brush_type: BrushType, operation: Operati
 
 
 func _apply_sphere_brush(center: Vector3, operation: Operation, radius: float, strength: float) -> void:
+	# grow_sphere: positive = expand solid (add terrain), negative = shrink solid (remove terrain)
 	match operation:
 		Operation.SUBTRACT:
-			# Positive strength removes terrain (grows the SDF outward)
-			_voxel_tool.grow_sphere(center, radius, strength)
-		Operation.ADD:
-			# Negative strength adds terrain (shrinks the SDF inward)
+			# Negative strength = shrink/remove terrain (mining/digging)
 			_voxel_tool.grow_sphere(center, radius, -strength)
+		Operation.ADD:
+			# Positive strength = expand/add terrain (building)
+			_voxel_tool.grow_sphere(center, radius, strength)
 		Operation.SMOOTH:
-			# Apply multiple passes with reduced strength for smoothing
-			var smooth_passes: int = 3
-			var smooth_strength: float = strength * 0.3
-			for i in range(smooth_passes):
-				_voxel_tool.smooth_sphere(center, radius, smooth_strength)
+			# Apply smoothing pass
+			_voxel_tool.smooth_sphere(center, radius, strength * 0.5)
 
 
 func _apply_capsule_brush(center: Vector3, operation: Operation, radius: float, strength: float) -> void:

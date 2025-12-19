@@ -2,9 +2,10 @@ extends BaseTool
 class_name Shovel
 
 @export_group("Shovel Settings")
-@export var sphere_radius: float = 1.5  # Slightly larger than pickaxe for smoother digging
-@export var dig_strength: float = 4.0  # Slightly weaker since targeting soft materials
+@export var sphere_radius: float = 2.0  # Larger radius for smoother digging
+@export var dig_strength: float = 8.0  # Higher strength for more terrain removal
 @export var smooth_mode: bool = false  # Toggle between dig and smooth operations
+@export var post_smooth_passes: int = 2  # Smoothing passes after digging
 
 # Last hit material for feedback
 var last_hit_material_id: int = -1
@@ -79,6 +80,18 @@ func _use(hit_result: VoxelRaycastResult) -> bool:
 		dig_strength,
 		tool_tier
 	)
+	
+	# Apply post-dig smoothing to reduce jagged edges (only for SUBTRACT operations)
+	if operation == TerrainEditSystem.Operation.SUBTRACT and post_smooth_passes > 0:
+		for i in range(post_smooth_passes):
+			TerrainEditSystem.apply_brush(
+				hit_position,
+				TerrainEditSystem.BrushType.SPHERE,
+				TerrainEditSystem.Operation.SMOOTH,
+				sphere_radius * 1.2,
+				3.0,
+				0
+			)
 	
 	# Reduce durability
 	_reduce_durability(1)

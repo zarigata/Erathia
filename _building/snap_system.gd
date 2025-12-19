@@ -241,18 +241,58 @@ func _update_preview_position() -> void:
 		return
 	
 	# Raycast from camera center
-	var hit: VoxelRaycastResult = null
-	if TerrainEditSystem:
-		hit = TerrainEditSystem.raycast_from_camera(camera, preview_raycast_distance)
+	# Raycast from camera center
+	var cursor_position: Vector3
+	var hit_found: bool = false
 	
-	if not hit:
+	# Skip Voxel Raycast - it causes self-intersection issues. 
+	# Rely on Physics Raycast which has the robust 2m offset.
+	var hit: VoxelRaycastResult = null
+	# if TerrainEditSystem:
+	# 	hit = TerrainEditSystem.raycast_from_camera(camera, preview_raycast_distance)
+	
+	if hit:
+		cursor_position = Vector3(hit.position)
+		hit_found = true
+	else:
+		# Fallback: Standard Physics Raycast
+		var space_state := get_viewport().get_world_3d().direct_space_state
+		
+		# OFFSET ORIGIN: 0.5m is enough to clear player capsule (radius 0.4) but safe for terrain
+		var from: Vector3 = camera.global_position - camera.global_transform.basis.z * 0.5
+		var to: Vector3 = from - camera.global_transform.basis.z * preview_raycast_distance
+		
+		# Create ray query
+		var query := PhysicsRayQueryParameters3D.create(from, to)
+		query.collision_mask = 0b11 
+		
+		# Exclude player (Just in case offset isn't enough for some animations)
+		var player := get_tree().get_first_node_in_group("player")
+		if player:
+			query.exclude = [player.get_rid()]
+		
+		var result := space_state.intersect_ray(query)
+		if not result.is_empty():
+			# Debug logic
+			var dist: float = camera.global_position.distance_to(result.position)
+			print("SnapSystem Hit: ", result.collider.name, " Dist: ", dist, "m")
+			
+			cursor_position = result["position"]
+			hit_found = true
+	
+	if not hit_found:
+		# Ghost Preview
 		active_snap_point = {}
 		preview_is_valid = false
-		preview_piece.visible = false
-		return
+		preview_piece.visible = true
+		preview_piece.set_preview_valid(false)
+		
+		# Place 4m in front
+		cursor_position = camera.global_position - camera.global_transform.basis.z * 4.0
+	else:
+		preview_piece.visible = true
 	
-	preview_piece.visible = true
-	var cursor_position: Vector3 = Vector3(hit.position)
+	# cursor_position is now set (either hit or ghost), proceed with snapping logic
 	
 	# Find nearby placed pieces
 	_update_nearby_pieces(cursor_position)

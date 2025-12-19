@@ -28,11 +28,15 @@ uniform float grass_noise_scale : hint_range(0.01, 2.0) = 0.6;
 
 // Global parameters
 uniform float blend_sharpness : hint_range(0.1, 10.0) = 2.0;
-uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 0.3;
+uniform float ambient_occlusion_strength : hint_range(0.0, 1.0) = 0.2;
 uniform float noise_intensity : hint_range(0.0, 1.0) = 0.15;
 
+// Minimum ambient lighting to prevent complete darkness
+uniform float min_ambient_light : hint_range(0.0, 1.0) = 0.25;
+uniform vec3 ambient_color : source_color = vec3(0.6, 0.65, 0.75);
+
 // Height-based variation
-uniform float height_variation_strength : hint_range(0.0, 1.0) = 0.1;
+uniform float height_variation_strength : hint_range(0.0, 1.0) = 0.05;
 
 // Ore emissive glow
 uniform float ore_emissive_strength : hint_range(0.0, 1.0) = 0.05;
@@ -166,8 +170,10 @@ float get_material_noise(vec3 world_pos, vec3 normal, int material_id) {
 
 // Approximate ambient occlusion from vertex normal
 float calculate_ao(vec3 normal) {
-    // Surfaces facing down get more AO (crevices)
+    // Surfaces facing down get more AO (crevices), but with minimum light
     float ao = 1.0 - max(0.0, -normal.y) * ambient_occlusion_strength;
+    // Ensure minimum ambient lighting is always present
+    ao = max(ao, min_ambient_light);
     return ao;
 }
 
@@ -276,9 +282,14 @@ void fragment() {
     vec3 final_color = base_color + noise_color_offset + height_offset;
     final_color = clamp(final_color, vec3(0.0), vec3(1.0));
     
-    // Apply ambient occlusion
+    // Apply ambient occlusion with minimum ambient contribution
     float ao = calculate_ao(flat_normal);
     final_color *= ao;
+    
+    // Add subtle ambient contribution to prevent complete darkness
+    vec3 ambient_contribution = ambient_color * min_ambient_light * 0.3;
+    final_color = final_color + ambient_contribution * (1.0 - ao);
+    final_color = clamp(final_color, vec3(0.0), vec3(1.0));
     
     // Output
     ALBEDO = final_color;
