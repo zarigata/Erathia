@@ -31,6 +31,11 @@ const DEFAULT_SETTINGS := {
 		"fullscreen": false,
 		"fov": 75.0,
 	},
+	"graphics": {
+		"biome_height_variation": 0.25,
+		"vegetation_density": 1.0,
+		"vegetation_distance": 1,
+	},
 	"ui": {
 		"scale": 1.0,
 	},

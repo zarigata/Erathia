@@ -182,30 +182,53 @@ void fragment() {
     vec3 flat_normal = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     NORMAL = flat_normal;
     
-    // Get primary material index from Single texture mode
-    int material_id = int(round(v_material_index));
+    // Get material index - try from CUSTOM1, fallback to position-based
+    int material_id = int(floor(v_material_index + 0.5));
     
-    // Calculate blend weights based on screen-space derivatives for smooth transitions
-    // This creates smooth blending at material boundaries
+    // If material index is 0 or invalid, calculate from world position
+    // This provides a fallback for when material data isn't properly passed
+    if (material_id <= 0 || material_id > 6) {
+        // Calculate biome from world position using simple noise-like function
+        float dist = length(world_position.xz);
+        float height = world_position.y;
+        
+        // Ocean at edges
+        if (dist > 6000.0) {
+            material_id = 4; // Sand (ocean floor)
+        } else if (dist > 5500.0) {
+            material_id = 4; // Sand (beach)
+        } else if (height > 60.0) {
+            material_id = 5; // Snow (mountain tops)
+        } else if (height > 40.0) {
+            material_id = 2; // Stone (mountains)
+        } else if (height < 5.0) {
+            material_id = 1; // Dirt (low areas)
+        } else {
+            material_id = 6; // Grass (normal terrain)
+        }
+    }
+    
+    // Clamp to valid range (0-6)
+    material_id = clamp(material_id, 0, 6);
+    
+    // For blending, check if we're at a boundary using derivatives
     float mat_dx = dFdx(v_material_index);
     float mat_dy = dFdy(v_material_index);
     float mat_gradient = length(vec2(mat_dx, mat_dy));
     
-    // Detect if we're at a material boundary (gradient > 0 means transition)
-    bool at_boundary = mat_gradient > 0.01;
+    // Only blend at real material boundaries (gradient indicates different materials)
+    bool at_boundary = mat_gradient > 0.3;
     
-    // Calculate weights for smooth blending
-    // Use fractional part of material index interpolation for blend factor
+    // Get blend factor for transitions
     float blend_factor = fract(v_material_index);
     
     // Determine the two materials being blended
     int mat_low = int(floor(v_material_index));
-    int mat_high = int(ceil(v_material_index));
+    int mat_high = mat_low + 1;
     
     // Clamp material IDs to valid range (0-6)
     mat_low = clamp(mat_low, 0, 6);
     mat_high = clamp(mat_high, 0, 6);
-    material_id = clamp(material_id, 0, 6);
     
     // Base colors for each material
     vec3 colors[7];

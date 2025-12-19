@@ -29,19 +29,28 @@ const FACTION_NOISE_FREQUENCY: float = 0.0005
 # =============================================================================
 
 enum Biome {
+	# Primary biomes (0-12)
 	PLAINS = 0,
 	FOREST = 1,
 	DESERT = 2,
 	SWAMP = 3,
 	TUNDRA = 4,
-	JUNGLE = 5,
+	JUNGLE = 5,        # Only spawns near water/coast
 	SAVANNA = 6,
 	MOUNTAIN = 7,
-	BEACH = 8,
+	BEACH = 8,         # Coastal biome with palm trees, coconuts
 	DEEP_OCEAN = 9,
 	ICE_SPIRES = 10,
 	VOLCANIC = 11,
-	MUSHROOM = 12
+	MUSHROOM = 12,
+	# Transition biomes (13-19) - handle slopes between biomes at max 35 degrees
+	SLOPE_PLAINS = 13,      # Gentle grassy slopes
+	SLOPE_FOREST = 14,      # Forested hillsides
+	SLOPE_MOUNTAIN = 15,    # Rocky mountain slopes
+	SLOPE_SNOW = 16,        # Snowy slopes (ice/tundra transitions)
+	SLOPE_VOLCANIC = 17,    # Ashen slopes near volcanoes
+	CLIFF_COASTAL = 18,     # Coastal cliffs (beach to highlands)
+	SLOPE_DESERT = 19,      # Sandy dune slopes
 }
 
 # =============================================================================
@@ -80,6 +89,7 @@ const FACTION_BIOMES: Dictionary = {
 # =============================================================================
 
 const BIOME_COLORS: Dictionary = {
+	# Primary biomes
 	Biome.PLAINS: Color(0.6, 0.8, 0.4),       # Light green
 	Biome.FOREST: Color(0.2, 0.5, 0.2),       # Dark green
 	Biome.DESERT: Color(0.9, 0.8, 0.5),       # Sandy yellow
@@ -92,7 +102,15 @@ const BIOME_COLORS: Dictionary = {
 	Biome.DEEP_OCEAN: Color(0.1, 0.2, 0.5),   # Deep blue
 	Biome.ICE_SPIRES: Color(0.9, 0.95, 1.0),  # Ice white-blue
 	Biome.VOLCANIC: Color(0.3, 0.1, 0.1),     # Dark red
-	Biome.MUSHROOM: Color(0.6, 0.3, 0.6)      # Purple
+	Biome.MUSHROOM: Color(0.6, 0.3, 0.6),     # Purple
+	# Transition biomes
+	Biome.SLOPE_PLAINS: Color(0.5, 0.7, 0.35),   # Darker green slopes
+	Biome.SLOPE_FOREST: Color(0.25, 0.45, 0.2),  # Forest hill green
+	Biome.SLOPE_MOUNTAIN: Color(0.45, 0.45, 0.45), # Mountain slope gray
+	Biome.SLOPE_SNOW: Color(0.85, 0.9, 0.95),    # Snowy slope
+	Biome.SLOPE_VOLCANIC: Color(0.25, 0.15, 0.1), # Ashen slope
+	Biome.CLIFF_COASTAL: Color(0.7, 0.65, 0.5),  # Coastal cliff tan
+	Biome.SLOPE_DESERT: Color(0.85, 0.75, 0.45), # Desert dune slope
 }
 
 const FACTION_BORDER_COLORS: Dictionary = {
@@ -379,13 +397,15 @@ func generate_world_map() -> void:
 			var color := Color8(biome_id, faction_id, elevation)
 			image.set_pixel(x, y, color)
 	
-	# Ensure output directory exists
-	var dir := DirAccess.open("res://_assets")
-	if dir == null:
-		DirAccess.make_dir_recursive_absolute("res://_assets")
+	# Save to user:// for runtime accessibility (res:// is read-only at runtime)
+	var save_path := "user://world_map.png"
 	
-	# Save image
-	var save_path := "res://_assets/world_map.png"
+	# Also save to res:// for editor use if in editor
+	if Engine.is_editor_hint():
+		var dir := DirAccess.open("res://_assets")
+		if dir == null:
+			DirAccess.make_dir_recursive_absolute("res://_assets")
+		image.save_png("res://_assets/world_map.png")
 	var error := image.save_png(save_path)
 	if error != OK:
 		push_error("[MapGenerator] Failed to save world map: %s" % error_string(error))
@@ -428,8 +448,10 @@ func generate_world_map() -> void:
 func generate_debug_map() -> void:
 	print("[MapGenerator] Generating debug visualization map...")
 	
-	# First check if world map exists
-	var world_map_path := "res://_assets/world_map.png"
+	# First check if world map exists (check user:// first, then res://)
+	var world_map_path := "user://world_map.png"
+	if not FileAccess.file_exists(world_map_path):
+		world_map_path = "res://_assets/world_map.png"
 	if not FileAccess.file_exists(world_map_path):
 		print("[MapGenerator] World map not found. Generating it first...")
 		generate_world_map()

@@ -30,6 +30,7 @@ TerrainCleanupSystem="*res://_engine/terrain/terrain_cleanup_system.gd"
 WorldSeedManager="*res://_core/world_seed_manager.gd"
 PieceDatabase="*res://_building/pieces/piece_database.gd"
 SnapSystem="*res://_building/snap_system.gd"
+WorldInitManager="*res://_core/world_init_manager.gd"
 GDAIMCPRuntime="*res://addons/gdai-mcp-plugin-godot/gdai_mcp_runtime.gd"
 
 [display]

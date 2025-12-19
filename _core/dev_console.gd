@@ -79,6 +79,12 @@ func _register_core_commands() -> void:
 	# Building cheat commands
 	register_command("infinite_build", _cmd_infinite_build, "Toggle infinite building (no resource cost)")
 	register_command("infinite_craft", _cmd_infinite_craft, "Toggle infinite crafting (no resource cost)")
+	# World initialization commands
+	register_command("set_biome_strength", _cmd_set_biome_strength, "Set biome height modulation: set_biome_strength <0.0-1.0>")
+	register_command("prewarm_terrain", _cmd_prewarm_terrain, "Prewarm terrain chunks: prewarm_terrain <radius>")
+	register_command("validate_world", _cmd_validate_world, "Run world validation checks")
+	register_command("show_biome_boundaries", _cmd_show_biome_boundaries, "Toggle biome boundary debug visualization")
+	register_command("world_status", _cmd_world_status, "Show world initialization status")
 
 
 ## Register a new command
@@ -520,7 +526,13 @@ func _cmd_regenerate_world(args: Array[String]) -> String:
 		return "Error: WorldSeedManager not available"
 	
 	seed_manager.regenerate_seed()
-	return "New world seed generated: %d (terrain regenerating...)" % seed_manager.get_world_seed()
+	
+	# Reload the scene to force complete terrain regeneration
+	# This is necessary because VoxelLodTerrain caches generated chunks
+	print("[DevConsole] Reloading scene to regenerate world with new seed...")
+	get_tree().call_deferred("reload_current_scene")
+	
+	return "New world seed generated: %d (reloading scene...)" % seed_manager.get_world_seed()
 
 
 func _cmd_reload_biomes(args: Array[String]) -> String:
@@ -612,3 +624,151 @@ func _cmd_infinite_craft(args: Array[String]) -> String:
 	infinite_crafting = not infinite_crafting
 	cheat_toggled.emit("infinite_craft", infinite_crafting)
 	return "Infinite crafting: %s" % ("ON" if infinite_crafting else "OFF")
+
+
+# =============================================================================
+# WORLD INITIALIZATION COMMANDS
+# =============================================================================
+
+func _cmd_set_biome_strength(args: Array[String]) -> String:
+	if args.is_empty():
+		# Show current value
+		var biome_gen := _get_biome_generator()
+		if biome_gen:
+			return "Current biome height modulation: %.2f" % biome_gen.height_modulation_strength
+		return "Error: BiomeAwareGenerator not found"
+	
+	var value := args[0].to_float()
+	if value < 0.0 or value > 1.0:
+		return "Error: Value must be between 0.0 and 1.0"
+	
+	var biome_gen := _get_biome_generator()
+	if not biome_gen:
+		return "Error: BiomeAwareGenerator not found"
+	
+	biome_gen.height_modulation_strength = value
+	
+	# Optionally reload terrain to apply changes
+	if args.size() > 1 and args[1].to_lower() == "reload":
+		_cmd_reload_terrain([])
+		return "Biome height modulation set to %.2f (terrain reloading...)" % value
+	
+	return "Biome height modulation set to %.2f (use 'reload_terrain' to apply)" % value
+
+
+func _cmd_prewarm_terrain(args: Array[String]) -> String:
+	var radius := 3  # Default radius
+	if not args.is_empty():
+		radius = args[0].to_int()
+		if radius < 1 or radius > 10:
+			return "Error: Radius must be between 1 and 10"
+	
+	var root := get_tree().current_scene
+	if not root:
+		return "Error: No current scene"
+	
+	var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+	if not terrain:
+		return "Error: VoxelLodTerrain not found"
+	
+	var player := _get_player()
+	var center := Vector3.ZERO
+	if player:
+		center = player.global_position
+	
+	# Use TerrainPrewarmer
+	TerrainPrewarmer.prewarm_area(terrain, center, radius)
+	
+	var chunk_count := (radius * 2 + 1) * (radius * 2 + 1)
+	return "Prewarmed %d chunks around position %s" % [chunk_count, center]
+
+
+func _cmd_validate_world(args: Array[String]) -> String:
+	var world_init = get_node_or_null("/root/WorldInitManager")
+	if not world_init:
+		return "Error: WorldInitManager not available"
+	
+	var lines: Array[String] = ["=== World Validation ==="]
+	
+	# Get terrain
+	var root := get_tree().current_scene
+	var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain if root else null
+	
+	# Terrain check
+	if terrain:
+		lines.append("Terrain: OK (visible=%s)" % terrain.visible)
+	else:
+		lines.append("Terrain: MISSING")
+	
+	# Biome generator check
+	var biome_gen := _get_biome_generator()
+	if biome_gen:
+		lines.append("BiomeGenerator: OK (strength=%.2f)" % biome_gen.height_modulation_strength)
+	else:
+		lines.append("BiomeGenerator: MISSING")
+	
+	# Vegetation check
+	var veg_instancer := _get_vegetation_instancer()
+	if veg_instancer:
+		var count: int = veg_instancer.get_total_instance_count() if veg_instancer.has_method("get_total_instance_count") else 0
+		lines.append("Vegetation: %d instances" % count)
+	else:
+		lines.append("Vegetation: NOT FOUND")
+	
+	# World init status
+	if world_init.has_method("get_stage_name"):
+		var stage: String = world_init.get_stage_name()
+		var progress: float = world_init.get_total_progress() if world_init.has_method("get_total_progress") else 0.0
+		lines.append("Init Status: %s (%.0f%%)" % [stage, progress * 100])
+	
+	return "\n".join(lines)
+
+
+func _cmd_show_biome_boundaries(args: Array[String]) -> String:
+	# This would toggle a debug visualization - for now just return info
+	var biome_gen := _get_biome_generator()
+	if not biome_gen:
+		return "Error: BiomeAwareGenerator not found"
+	
+	return "Biome boundary visualization: Not yet implemented. Use performance overlay (F9) to see biome info."
+
+
+func _cmd_world_status(args: Array[String]) -> String:
+	var world_init = get_node_or_null("/root/WorldInitManager")
+	var lines: Array[String] = ["=== World Status ==="]
+	
+	# Seed
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if seed_manager and seed_manager.has_method("get_world_seed"):
+		lines.append("World Seed: %d" % seed_manager.get_world_seed())
+	
+	# Init status
+	if world_init:
+		var stage: String = world_init.get_stage_name() if world_init.has_method("get_stage_name") else "Unknown"
+		var is_init: bool = world_init.is_initializing if "is_initializing" in world_init else false
+		var attempt: int = world_init.get_current_attempt() if world_init.has_method("get_current_attempt") else 0
+		lines.append("Stage: %s" % stage)
+		lines.append("Initializing: %s" % ("Yes" if is_init else "No"))
+		if attempt > 0:
+			lines.append("Attempt: %d/%d" % [attempt, world_init.get_max_attempts() if world_init.has_method("get_max_attempts") else 3])
+	else:
+		lines.append("WorldInitManager: Not available")
+	
+	# Biome generator
+	var biome_gen := _get_biome_generator()
+	if biome_gen:
+		lines.append("Height Modulation: %.2f" % biome_gen.height_modulation_strength)
+		lines.append("Blend Distance: %.1fm" % biome_gen.BIOME_BLEND_DISTANCE)
+	
+	return "\n".join(lines)
+
+
+func _get_biome_generator() -> BiomeAwareGenerator:
+	var root := get_tree().current_scene
+	if not root:
+		return null
+	
+	var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+	if terrain and terrain.generator:
+		return terrain.generator as BiomeAwareGenerator
+	return null

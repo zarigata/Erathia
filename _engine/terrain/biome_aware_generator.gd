@@ -51,9 +51,9 @@ const DIRT_LAYER_THICKNESS: float = 6.0
 @export var min_ore_depth: float = 5.0
 
 # Height modulation strength (scales biome height offsets)
-# WARNING: Values above 0.5 can cause terrain spikes at biome boundaries
-# Start with 0.0 (disabled) and increase gradually
-@export_range(0.0, 1.0, 0.1) var height_modulation_strength: float = 0.0
+# 1.0 = full effect (mountains 60-80m higher, oceans 80m lower)
+# Lower values for gentler terrain variation
+@export_range(0.0, 1.0, 0.1) var height_modulation_strength: float = 1.0
 
 # =============================================================================
 # INTERNAL STATE
@@ -66,6 +66,9 @@ var _world_map_loaded: bool = false
 
 # Chunk biome cache (avoids re-sampling)
 var _chunk_biome_cache: Dictionary = {}
+
+# Biome blending settings
+const BIOME_BLEND_DISTANCE: float = 15.0  # Meters for smooth transitions
 
 # Mutex for thread-safe access to shared mutable state
 var _cache_mutex: Mutex = Mutex.new()
@@ -106,7 +109,12 @@ func _init() -> void:
 
 func _load_world_map() -> void:
 	_cache_mutex.lock()
-	var map_path := "res://_assets/world_map.png"
+	
+	# Check user:// first (runtime generated), then res:// (editor/shipped)
+	var map_path := "user://world_map.png"
+	if not FileAccess.file_exists(map_path):
+		map_path = "res://_assets/world_map.png"
+	
 	if FileAccess.file_exists(map_path):
 		var loaded_image := Image.load_from_file(map_path)
 		if loaded_image:
@@ -116,11 +124,11 @@ func _load_world_map() -> void:
 			_map_size = MapGenerator.MAP_SIZE
 			_world_size = MapGenerator.WORLD_SIZE
 			_pixel_scale = _world_size / float(_map_size) if _map_size > 0 else 1.0
-			print("[BiomeAwareGenerator] World map loaded: %dx%d (map_size=%d, world_size=%.0f, pixel_scale=%.4f)" % [_world_map_image.get_width(), _world_map_image.get_height(), _map_size, _world_size, _pixel_scale])
+			print("[BiomeAwareGenerator] World map loaded from %s: %dx%d (map_size=%d, world_size=%.0f, pixel_scale=%.4f)" % [map_path, _world_map_image.get_width(), _world_map_image.get_height(), _map_size, _world_size, _pixel_scale])
 		else:
-			push_warning("[BiomeAwareGenerator] Failed to load world map image")
+			push_warning("[BiomeAwareGenerator] Failed to load world map image from: %s" % map_path)
 	else:
-		push_warning("[BiomeAwareGenerator] World map not found at: %s" % map_path)
+		push_warning("[BiomeAwareGenerator] World map not found (checked user:// and res://)")
 	_cache_mutex.unlock()
 
 
@@ -130,24 +138,24 @@ func _init_biome_height_offsets() -> void:
 	# Positive values LOWER terrain (add to SDF), Negative values RAISE terrain (subtract from SDF)
 	# Note: SDF convention is negative = solid, positive = air
 	#
-	# IMPORTANT: Keep values SMALL (-3 to +3 range) to avoid terrain spikes!
-	# The base VoxelGeneratorNoise already creates terrain variation.
-	# These offsets are just gentle biome-specific adjustments.
+	# VALUES SCALED FOR VISIBLE EFFECT:
+	# With height_modulation_strength = 1.0, these are the actual height changes in meters
+	# Mountains should be 40-80m higher, oceans 50-100m lower, beaches at sea level
 	
 	_biome_height_offsets = {
-		MapGenerator.Biome.PLAINS: 0.0,        # Base level
-		MapGenerator.Biome.FOREST: -0.5,       # Very slightly elevated
-		MapGenerator.Biome.DESERT: 0.5,        # Very slightly lower
-		MapGenerator.Biome.SWAMP: 1.0,         # Low, wet areas
-		MapGenerator.Biome.TUNDRA: -1.0,       # Slightly elevated cold regions
-		MapGenerator.Biome.JUNGLE: -0.5,       # Slightly elevated tropical
-		MapGenerator.Biome.SAVANNA: 0.0,       # Similar to plains
-		MapGenerator.Biome.MOUNTAIN: -2.0,     # Elevated (base noise already makes mountains)
-		MapGenerator.Biome.BEACH: 1.5,         # Near sea level
-		MapGenerator.Biome.DEEP_OCEAN: 3.0,    # Below sea level
-		MapGenerator.Biome.ICE_SPIRES: -2.5,   # High peaks (base noise helps)
-		MapGenerator.Biome.VOLCANIC: -1.5,     # Volcanic mountains
-		MapGenerator.Biome.MUSHROOM: -0.5      # Slightly elevated
+		MapGenerator.Biome.PLAINS: 0.0,         # Base level (reference)
+		MapGenerator.Biome.FOREST: -10.0,       # Elevated forested hills
+		MapGenerator.Biome.DESERT: 5.0,         # Slightly lower desert dunes
+		MapGenerator.Biome.SWAMP: 20.0,         # Low wetlands near water
+		MapGenerator.Biome.TUNDRA: -15.0,       # Elevated frozen plains
+		MapGenerator.Biome.JUNGLE: -5.0,        # Slightly elevated tropical
+		MapGenerator.Biome.SAVANNA: 0.0,        # Similar to plains
+		MapGenerator.Biome.MOUNTAIN: -60.0,     # High mountain peaks
+		MapGenerator.Biome.BEACH: 30.0,         # Low near sea level
+		MapGenerator.Biome.DEEP_OCEAN: 80.0,    # Below sea level (underwater)
+		MapGenerator.Biome.ICE_SPIRES: -80.0,   # Highest peaks
+		MapGenerator.Biome.VOLCANIC: -40.0,     # Volcanic mountains
+		MapGenerator.Biome.MUSHROOM: -20.0      # Elevated fungal forests
 	}
 
 
@@ -190,9 +198,11 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 	_base_generator.generate_block(out_buffer, origin, lod)
 	
 	# Step 2: Get biome for this chunk (sample once per chunk)
-	var biome_id := _get_chunk_biome(origin, block_size, lod_scale)
-	var height_offset := _get_biome_height_offset(biome_id)
-	var ore_richness := _get_ore_richness(biome_id)
+	var primary_biome_id := _get_chunk_biome(origin, block_size, lod_scale)
+	var ore_richness := _get_ore_richness(primary_biome_id)
+	
+	# Step 2.5: Check if this is a boundary chunk (needs per-voxel blending)
+	var is_boundary_chunk := _is_boundary_chunk(origin, block_size, lod_scale)
 	
 	# Step 3: Apply height offset and assign materials
 	for z in range(block_size.z):
@@ -202,11 +212,25 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 				var world_x: float = origin.x + x * lod_scale
 				var world_y: float = origin.y + y * lod_scale
 				var world_z: float = origin.z + z * lod_scale
+				var world_pos := Vector3(world_x, world_y, world_z)
 				
 				# Get base SDF value
 				var sdf: float = out_buffer.get_voxel_f(x, y, z, VoxelBuffer.CHANNEL_SDF)
 				
-				# Apply biome height modulation (additive)
+				# Apply biome height modulation
+				var height_offset: float
+				var biome_id_for_material: int = primary_biome_id
+				
+				if is_boundary_chunk and height_modulation_strength > 0.0:
+					# Per-voxel biome blending at boundaries
+					var blend_result := _sample_biome_blended(world_pos)
+					height_offset = blend_result.blended_height_offset
+					biome_id_for_material = blend_result.dominant_biome
+				else:
+					# Use cached primary biome (performance optimization)
+					height_offset = _get_biome_height_offset(primary_biome_id)
+				
+				# Apply height modulation (additive)
 				# Positive offset = terrain goes down (more air)
 				# Negative offset = terrain goes up (more solid)
 				sdf += height_offset * height_modulation_strength
@@ -215,20 +239,107 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 				out_buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
 				
 				# Determine material based on biome, SDF, and position
-				var world_pos := Vector3(world_x, world_y, world_z)
-				var material_id := _get_material_for_biome(biome_id, sdf, world_pos, ore_richness)
+				var material_id := _get_material_for_biome(biome_id_for_material, sdf, world_pos, ore_richness)
 				
 				# Write material ID to INDICES channel
 				out_buffer.set_voxel(material_id, x, y, z, VoxelBuffer.CHANNEL_INDICES)
 	
 	# Step 4: Emit signal for vegetation (LOD 0 only)
+	# Emit synchronously - VegetationInstancer handles threading via its own deferred processing
 	if lod == 0:
-		# Use call_deferred to avoid threading issues
-		call_deferred("_emit_chunk_generated", origin, biome_id)
+		chunk_generated.emit(origin, primary_biome_id)
 
 
-func _emit_chunk_generated(origin: Vector3i, biome_id: int) -> void:
-	chunk_generated.emit(origin, biome_id)
+# =============================================================================
+# BIOME BOUNDARY DETECTION AND BLENDING
+# =============================================================================
+
+## Check if chunk is at a biome boundary (sample 4 corners)
+func _is_boundary_chunk(origin: Vector3i, block_size: Vector3i, lod_scale: int) -> bool:
+	if not _world_map_loaded or _world_map_image == null:
+		return false
+	
+	# Sample biome at 4 corners of the chunk
+	var chunk_width: float = block_size.x * lod_scale
+	var chunk_depth: float = block_size.z * lod_scale
+	
+	var corners := [
+		Vector3(origin.x, 0, origin.z),
+		Vector3(origin.x + chunk_width, 0, origin.z),
+		Vector3(origin.x, 0, origin.z + chunk_depth),
+		Vector3(origin.x + chunk_width, 0, origin.z + chunk_depth)
+	]
+	
+	var first_biome := _sample_biome_at_world_pos(corners[0])
+	
+	for i in range(1, 4):
+		var biome := _sample_biome_at_world_pos(corners[i])
+		if biome != first_biome:
+			return true
+	
+	return false
+
+
+## Sample biome at world position (for boundary detection)
+func _sample_biome_at_world_pos(world_pos: Vector3) -> int:
+	if not _world_map_loaded or _world_map_image == null or _map_size == 0:
+		return MapGenerator.Biome.PLAINS
+	
+	# Convert world XZ to map pixel coordinates
+	var pixel_x: int = int((world_pos.x + _world_size * 0.5) / _pixel_scale)
+	var pixel_y: int = int((world_pos.z + _world_size * 0.5) / _pixel_scale)
+	
+	# Clamp to valid range
+	pixel_x = clampi(pixel_x, 0, _map_size - 1)
+	pixel_y = clampi(pixel_y, 0, _map_size - 1)
+	
+	var pixel := _world_map_image.get_pixel(pixel_x, pixel_y)
+	return int(pixel.r8)
+
+
+## Sample biome with smooth blending using bilinear interpolation
+func _sample_biome_blended(world_pos: Vector3) -> Dictionary:
+	if not _world_map_loaded or _world_map_image == null or _map_size == 0:
+		return {"blended_height_offset": 0.0, "dominant_biome": MapGenerator.Biome.PLAINS}
+	
+	# Sample at center and 4 nearby points for blending
+	var sample_dist := BIOME_BLEND_DISTANCE * 0.5
+	var sample_points := [
+		world_pos,
+		world_pos + Vector3(-sample_dist, 0, 0),
+		world_pos + Vector3(sample_dist, 0, 0),
+		world_pos + Vector3(0, 0, -sample_dist),
+		world_pos + Vector3(0, 0, sample_dist)
+	]
+	
+	# Collect biome samples and weights
+	var biome_weights: Dictionary = {}  # biome_id -> weight
+	var total_weight := 0.0
+	
+	for i in range(sample_points.size()):
+		var biome_id := _sample_biome_at_world_pos(sample_points[i])
+		var weight := 1.0 if i == 0 else 0.5  # Center point has more weight
+		
+		if not biome_weights.has(biome_id):
+			biome_weights[biome_id] = 0.0
+		biome_weights[biome_id] += weight
+		total_weight += weight
+	
+	# Normalize weights and calculate blended height offset
+	var blended_height := 0.0
+	var dominant_biome: int = MapGenerator.Biome.PLAINS
+	var max_weight := 0.0
+	
+	for biome_id: int in biome_weights.keys():
+		var normalized_weight: float = biome_weights[biome_id] / total_weight
+		var height_offset := _get_biome_height_offset(biome_id)
+		blended_height += height_offset * normalized_weight
+		
+		if biome_weights[biome_id] > max_weight:
+			max_weight = biome_weights[biome_id]
+			dominant_biome = biome_id
+	
+	return {"blended_height_offset": blended_height, "dominant_biome": dominant_biome}
 
 
 # =============================================================================
@@ -360,13 +471,19 @@ func _get_surface_material(biome_id: int) -> int:
 		MapGenerator.Biome.TUNDRA, MapGenerator.Biome.ICE_SPIRES:
 			return MAT_SNOW
 		MapGenerator.Biome.VOLCANIC:
-			return MAT_STONE  # Volcanic rock/obsidian (use stone for now)
+			return MAT_STONE  # Volcanic rock/obsidian
 		MapGenerator.Biome.DEEP_OCEAN:
 			return MAT_SAND  # Sandy ocean floor
 		MapGenerator.Biome.MOUNTAIN:
 			return MAT_STONE  # Rocky mountain surface
+		MapGenerator.Biome.PLAINS, MapGenerator.Biome.FOREST, MapGenerator.Biome.JUNGLE, MapGenerator.Biome.SAVANNA:
+			return MAT_GRASS  # Grassy biomes
+		MapGenerator.Biome.SWAMP:
+			return MAT_DIRT  # Muddy swamp
+		MapGenerator.Biome.MUSHROOM:
+			return MAT_DIRT  # Fungal soil
 		_:
-			return MAT_DIRT  # Default: dirt/grass for most biomes
+			return MAT_GRASS  # Default: grass for unknown biomes
 
 
 func _get_subsurface_material(biome_id: int) -> int:

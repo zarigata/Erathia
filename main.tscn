@@ -1,4 +1,4 @@
-[gd_scene load_steps=20 format=3 uid="uid://c3jsikgd7vfdp"]
+[gd_scene load_steps=21 format=3 uid="uid://c3jsikgd7vfdp"]
 
 [ext_resource type="Material" path="res://_assets/materials/smooth_surface.tres" id="2_material"]
 [ext_resource type="Script" uid="uid://b5d3nwn5eweku" path="res://_engine/terrain/biome_aware_generator.gd" id="3_generator_script"]
@@ -14,6 +14,9 @@
 [ext_resource type="Script" uid="uid://cs5xprx6vex7o" path="res://_world/vegetation/vegetation_debug.gd" id="11_veg_debug"]
 [ext_resource type="Script" uid="uid://c2e0ibvoqhfpg" path="res://_world/map_generator.gd" id="12_map_generator"]
 [ext_resource type="PackedScene" uid="uid://dv8k3m5nwq2xp" path="res://_ui/build_ui.tscn" id="13_build_ui"]
+[ext_resource type="PackedScene" uid="uid://dqw8m3k5npx2r" path="res://_ui/loading_screen.tscn" id="14_loading_screen"]
+[ext_resource type="Script" path="res://_engine/terrain/water_plane.gd" id="16_water_plane"]
+[ext_resource type="Script" path="res://_engine/terrain/biome_world_generator.gd" id="17_biome_world_gen"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.4, 0.6, 0.9, 1)
@@ -44,7 +47,7 @@ fog_density = 0.0008
 fog_sky_affect = 0.4
 
 [sub_resource type="VoxelGeneratorScript" id="BiomeGenerator_instance"]
-script = ExtResource("3_generator_script")
+script = ExtResource("17_biome_world_gen")
 
 [sub_resource type="VoxelMesherTransvoxel" id="VoxelMesherTransvoxel_mesher"]
 texturing_mode = 1
@@ -99,3 +102,11 @@ player_path = NodePath("../Player")
 [node name="DebugSettings" parent="." instance=ExtResource("9_debug_settings")]
 
 [node name="BuildUI" parent="." instance=ExtResource("13_build_ui")]
+
+[node name="LoadingScreen" parent="." instance=ExtResource("14_loading_screen")]
+
+[node name="WaterPlane" type="Node3D" parent="."]
+script = ExtResource("16_water_plane")
+water_level = 0.0
+water_size = 4000.0
+water_color = Color(0.15, 0.35, 0.55, 0.75)

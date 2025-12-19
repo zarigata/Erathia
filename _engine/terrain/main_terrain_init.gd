@@ -2,18 +2,35 @@ extends Node3D
 
 ## Main scene initialization script
 ## Handles terrain system setup, map generation coordination, and TerrainEditSystem initialization
+## Integrates with WorldInitManager for Minecraft-style loading sequence
 
 @export var terrain_path: NodePath = "VoxelLodTerrain"
 @export var map_generator_path: NodePath = "MapGenerator"
+@export var player_path: NodePath = "Player"
+@export var loading_screen_path: NodePath = "LoadingScreen"
+
+## If true, uses WorldInitManager for staged initialization
+@export var use_world_init_manager: bool = true
+
+## Default spawn position (Y will be adjusted to ground level)
+@export var default_spawn_position: Vector3 = Vector3(0, 50, 0)
 
 var _terrain: VoxelLodTerrain
 var _map_generator: MapGenerator
 var _biome_generator: BiomeAwareGenerator
+var _player: Node3D
+var _loading_screen: CanvasLayer
+var _world_init_manager: Node
 
 
 func _ready() -> void:
+	# Delete old world map to force regeneration with new seed
+	_delete_old_world_map()
+	
 	_terrain = get_node_or_null(terrain_path) as VoxelLodTerrain
 	_map_generator = get_node_or_null(map_generator_path) as MapGenerator
+	_player = get_node_or_null(player_path) as Node3D
+	_loading_screen = get_node_or_null(loading_screen_path) as CanvasLayer
 	
 	# Get BiomeAwareGenerator from terrain
 	if _terrain and _terrain.generator:
@@ -27,6 +44,23 @@ func _ready() -> void:
 	else:
 		print("[MainTerrainInit] MapGenerator not found, biomes may not load correctly")
 	
+	# Setup terrain connections and start initialization
+	_setup_terrain_and_connections()
+
+
+## Delete old world map files to force regeneration with new seed
+func _delete_old_world_map() -> void:
+	# Delete from user:// (runtime generated)
+	var user_map_path := "user://world_map.png"
+	if FileAccess.file_exists(user_map_path):
+		DirAccess.remove_absolute(user_map_path)
+		print("[MainTerrainInit] Deleted old world map from user://")
+	
+	# Note: We don't delete from res:// as that's read-only at runtime
+	print("[MainTerrainInit] World will regenerate with new seed")
+
+
+func _setup_terrain_and_connections() -> void:
 	# Connect to WorldSeedManager for seed changes
 	var seed_manager = get_node_or_null("/root/WorldSeedManager")
 	if seed_manager:
@@ -41,21 +75,109 @@ func _ready() -> void:
 			push_warning("[MainTerrainInit] TerrainEditSystem autoload not found")
 	else:
 		push_warning("[MainTerrainInit] VoxelLodTerrain not found at path: %s" % terrain_path)
+	
+	# Start world initialization
+	if use_world_init_manager:
+		call_deferred("_start_world_initialization")
+	else:
+		# Legacy mode: enable player immediately
+		_enable_player()
+
+
+func _start_world_initialization() -> void:
+	_world_init_manager = get_node_or_null("/root/WorldInitManager")
+	
+	if not _world_init_manager:
+		push_warning("[MainTerrainInit] WorldInitManager not found, using legacy initialization")
+		_enable_player()
+		return
+	
+	# Disable player until world is ready
+	_disable_player()
+	
+	# Connect to WorldInitManager signals
+	_world_init_manager.initialization_complete.connect(_on_world_init_complete)
+	_world_init_manager.initialization_failed.connect(_on_world_init_failed)
+	
+	# Start initialization
+	var spawn_pos := default_spawn_position
+	if _player:
+		spawn_pos = _player.global_position
+	
+	print("[MainTerrainInit] Starting world initialization at: %s" % spawn_pos)
+	_world_init_manager.start_initialization(spawn_pos)
+
+
+func _disable_player() -> void:
+	if not _player:
+		return
+	
+	# Disable player physics and input
+	if _player is CharacterBody3D:
+		_player.set_physics_process(false)
+		_player.set_process(false)
+		_player.set_process_input(false)
+		_player.set_process_unhandled_input(false)
+	
+	# Hide player
+	_player.visible = false
+	
+	print("[MainTerrainInit] Player disabled during world initialization")
+
+
+func _enable_player() -> void:
+	if not _player:
+		return
+	
+	# Enable player physics and input
+	if _player is CharacterBody3D:
+		_player.set_physics_process(true)
+		_player.set_process(true)
+		_player.set_process_input(true)
+		_player.set_process_unhandled_input(true)
+	
+	# Show player
+	_player.visible = true
+	
+	# Capture mouse for gameplay
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	
+	print("[MainTerrainInit] Player enabled")
+
+
+func _on_world_init_complete() -> void:
+	print("[MainTerrainInit] World initialization complete!")
+	
+	# Update player spawn position to safe location
+	if _world_init_manager and _player:
+		var safe_spawn: Vector3 = _world_init_manager.spawn_position
+		_player.global_position = safe_spawn
+		print("[MainTerrainInit] Player spawned at: %s" % safe_spawn)
+	
+	# Enable player
+	_enable_player()
+
+
+func _on_world_init_failed(reason: String) -> void:
+	push_error("[MainTerrainInit] World initialization failed: %s" % reason)
+	# Still enable player so user can at least explore/debug
+	_enable_player()
 
 
 func _on_map_generated(seed_value: int) -> void:
 	print("[MainTerrainInit] Map generated with seed: %d" % seed_value)
+	
+	# Skip if WorldInitManager is handling this
+	if use_world_init_manager and _world_init_manager:
+		return
 	
 	# Reload biome generator to pick up new map
 	if _biome_generator:
 		_biome_generator.reload_world_map_and_notify()
 		print("[MainTerrainInit] BiomeGenerator reloaded with new map")
 	
-	# Force terrain to regenerate by reassigning the generator
-	# This triggers chunk regeneration with the new biome map data
-	if _terrain and _biome_generator:
-		_terrain.generator = _biome_generator
-		print("[MainTerrainInit] Terrain generator reassigned to trigger regeneration")
+	# Force terrain to regenerate
+	_force_terrain_regeneration()
 
 
 func _on_seed_randomized(new_seed: int) -> void:
@@ -74,3 +196,32 @@ func _on_seed_randomized(new_seed: int) -> void:
 func _on_world_seed_changed(new_seed: int) -> void:
 	print("[MainTerrainInit] WorldSeedManager seed changed to: %d" % new_seed)
 	# MapGenerator will handle regeneration via its own connection
+
+
+## Force terrain to completely regenerate by clearing its internal state
+func _force_terrain_regeneration() -> void:
+	if not _terrain or not _biome_generator:
+		return
+	
+	print("[MainTerrainInit] Forcing terrain regeneration...")
+	
+	# Method 1: Toggle the terrain node off and on to clear internal state
+	# This forces VoxelLodTerrain to discard all cached chunks
+	var was_visible := _terrain.visible
+	_terrain.visible = false
+	
+	# Clear the generator temporarily
+	var saved_generator := _terrain.generator
+	_terrain.generator = null
+	
+	# Wait one frame for the terrain to clear its state
+	await get_tree().process_frame
+	
+	# Reassign the generator and make visible
+	_terrain.generator = saved_generator
+	_terrain.visible = was_visible
+	
+	# Wait another frame for terrain to start regenerating
+	await get_tree().process_frame
+	
+	print("[MainTerrainInit] Terrain regeneration triggered")

@@ -4,6 +4,8 @@ extends Node
 ## Coordinates all vegetation instancing, mesh caching, and biome-specific rules.
 ## Registered as autoload "VegetationManager" in project.godot
 
+const ProceduralTreeGeneratorScript = preload("res://_world/vegetation/procedural_tree_generator.gd")
+
 # =============================================================================
 # SIGNALS
 # =============================================================================
@@ -76,13 +78,13 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 	},
 	MapGenerator.Biome.TUNDRA: {
 		"types": [
-			{"type": VegetationType.TREE, "density": 0.03, "variants": ["dead_pine"]},
-			{"type": VegetationType.BUSH, "density": 0.05, "variants": ["frost_bush"]},
-			{"type": VegetationType.ROCK_SMALL, "density": 0.06, "variants": ["frost_stone"]},
-			{"type": VegetationType.ROCK_MEDIUM, "density": 0.02, "variants": ["frost_stone"]}
+			{"type": VegetationType.TREE, "density": 0.06, "variants": ["dead_pine"]},
+			{"type": VegetationType.BUSH, "density": 0.08, "variants": ["frost_bush"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.1, "variants": ["frost_stone"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.04, "variants": ["frost_stone"]}
 		],
-		"slope_max": 35.0,
-		"height_range": {"min": 10, "max": 150}
+		"slope_max": 45.0,
+		"height_range": {"min": -50, "max": 300}
 	},
 	MapGenerator.Biome.JUNGLE: {
 		"types": [
@@ -106,45 +108,48 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 	},
 	MapGenerator.Biome.MOUNTAIN: {
 		"types": [
-			{"type": VegetationType.TREE, "density": 0.03, "variants": ["pine"]},
-			{"type": VegetationType.BUSH, "density": 0.04, "variants": ["alpine_bush", "lichen"]},
-			{"type": VegetationType.ROCK_SMALL, "density": 0.1, "variants": ["granite"]},
-			{"type": VegetationType.ROCK_MEDIUM, "density": 0.05, "variants": ["granite"]}
+			{"type": VegetationType.TREE, "density": 0.06, "variants": ["pine"]},
+			{"type": VegetationType.BUSH, "density": 0.08, "variants": ["alpine_bush", "lichen"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.12, "variants": ["granite"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.06, "variants": ["granite"]}
 		],
-		"slope_max": 55.0,
-		"height_range": {"min": 40, "max": 400}
+		"slope_max": 65.0,
+		"height_range": {"min": -50, "max": 500}
 	},
 	MapGenerator.Biome.BEACH: {
+		# Enhanced beach with palm trees and coconuts
 		"types": [
-			{"type": VegetationType.TREE, "density": 0.02, "variants": ["palm"]},
-			{"type": VegetationType.BUSH, "density": 0.05, "variants": ["beach_grass", "dune_bush"]},
-			{"type": VegetationType.ROCK_SMALL, "density": 0.03, "variants": ["stone"]}
+			{"type": VegetationType.TREE, "density": 0.12, "variants": ["palm"]},  # More palm trees
+			{"type": VegetationType.BUSH, "density": 0.08, "variants": ["beach_grass", "dune_bush", "coconut_pile"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.04, "variants": ["shell", "driftwood"]},
+			{"type": VegetationType.GRASS_TUFT, "density": 0.1, "variants": ["beach_grass"]}
 		],
-		"slope_max": 20.0,
-		"height_range": {"min": -10, "max": 20}
+		"slope_max": 25.0,
+		"height_range": {"min": -5, "max": 25}
 	},
 	MapGenerator.Biome.DEEP_OCEAN: {
-		"types": [],  # No vegetation
+		"types": [],  # No vegetation underwater
 		"slope_max": 90.0,
 		"height_range": {"min": -250, "max": -40}
 	},
 	MapGenerator.Biome.ICE_SPIRES: {
 		"types": [
-			{"type": VegetationType.ROCK_SMALL, "density": 0.05, "variants": ["ice"]},
-			{"type": VegetationType.ROCK_MEDIUM, "density": 0.03, "variants": ["ice"]}
+			{"type": VegetationType.TREE, "density": 0.06, "variants": ["pine"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.08, "variants": ["ice"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.04, "variants": ["ice"]}
 		],
-		"slope_max": 60.0,
-		"height_range": {"min": 80, "max": 400}
+		"slope_max": 35.0,  # Max 35 degrees
+		"height_range": {"min": -50, "max": 500}
 	},
 	MapGenerator.Biome.VOLCANIC: {
 		"types": [
-			{"type": VegetationType.TREE, "density": 0.01, "variants": ["charred"]},
-			{"type": VegetationType.BUSH, "density": 0.02, "variants": ["ash_bush"]},
-			{"type": VegetationType.ROCK_SMALL, "density": 0.08, "variants": ["obsidian"]},
-			{"type": VegetationType.ROCK_MEDIUM, "density": 0.04, "variants": ["obsidian"]}
+			{"type": VegetationType.TREE, "density": 0.02, "variants": ["charred"]},
+			{"type": VegetationType.BUSH, "density": 0.03, "variants": ["ash_bush"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.1, "variants": ["obsidian"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.05, "variants": ["obsidian"]}
 		],
-		"slope_max": 55.0,
-		"height_range": {"min": -60, "max": 250}
+		"slope_max": 35.0,  # Max 35 degrees
+		"height_range": {"min": -60, "max": 300}
 	},
 	MapGenerator.Biome.MUSHROOM: {
 		"types": [
@@ -153,9 +158,72 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.ROCK_SMALL, "density": 0.03, "variants": ["fungal_stone"]},
 			{"type": VegetationType.GRASS_TUFT, "density": 0.15, "variants": ["spore_grass"]}
 		],
-		"slope_max": 40.0,
+		"slope_max": 35.0,
 		"height_range": {"min": -50, "max": 100}
-	}
+	},
+	# =========================================================================
+	# TRANSITION BIOMES - Sloped terrain between biomes (max 35 degrees)
+	# =========================================================================
+	MapGenerator.Biome.SLOPE_PLAINS: {
+		"types": [
+			{"type": VegetationType.GRASS_TUFT, "density": 0.15, "variants": ["grass"]},
+			{"type": VegetationType.BUSH, "density": 0.06, "variants": ["shrub"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.04, "variants": ["stone"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 200}
+	},
+	MapGenerator.Biome.SLOPE_FOREST: {
+		"types": [
+			{"type": VegetationType.TREE, "density": 0.08, "variants": ["pine", "oak"]},
+			{"type": VegetationType.BUSH, "density": 0.1, "variants": ["shrub", "fern"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.05, "variants": ["mossy_stone"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 200}
+	},
+	MapGenerator.Biome.SLOPE_MOUNTAIN: {
+		"types": [
+			{"type": VegetationType.TREE, "density": 0.03, "variants": ["pine"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.12, "variants": ["granite"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.06, "variants": ["granite"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 300}
+	},
+	MapGenerator.Biome.SLOPE_SNOW: {
+		"types": [
+			{"type": VegetationType.TREE, "density": 0.04, "variants": ["pine"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.08, "variants": ["frost_stone"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.04, "variants": ["ice"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 400}
+	},
+	MapGenerator.Biome.SLOPE_VOLCANIC: {
+		"types": [
+			{"type": VegetationType.ROCK_SMALL, "density": 0.1, "variants": ["obsidian"]},
+			{"type": VegetationType.ROCK_MEDIUM, "density": 0.05, "variants": ["obsidian"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 250}
+	},
+	MapGenerator.Biome.CLIFF_COASTAL: {
+		"types": [
+			{"type": VegetationType.BUSH, "density": 0.06, "variants": ["beach_grass"]},
+			{"type": VegetationType.ROCK_SMALL, "density": 0.08, "variants": ["stone"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -20, "max": 100}
+	},
+	MapGenerator.Biome.SLOPE_DESERT: {
+		"types": [
+			{"type": VegetationType.ROCK_SMALL, "density": 0.06, "variants": ["sandstone"]},
+			{"type": VegetationType.BUSH, "density": 0.02, "variants": ["dead_bush"]}
+		],
+		"slope_max": 35.0,
+		"height_range": {"min": -50, "max": 150}
+	},
 }
 
 # =============================================================================
@@ -170,6 +238,9 @@ var _instance_spatial_hash: Dictionary = {}  # Grid cell -> Array of positions
 
 var debug_show_zones: bool = false
 var debug_enabled: bool = false
+
+# Procedural generators
+var _tree_generator: RefCounted
 
 # Statistics
 var _stats: Dictionary = {
@@ -188,7 +259,8 @@ var _stats: Dictionary = {
 # =============================================================================
 
 func _ready() -> void:
-	print("[VegetationManager] Initialized")
+	_tree_generator = ProceduralTreeGeneratorScript.new()
+	print("[VegetationManager] Initialized with procedural tree generator")
 
 
 # =============================================================================
@@ -214,7 +286,12 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 	var mesh: Mesh = null
 	match type:
 		VegetationType.TREE:
-			mesh = TreeGenerator.generate_tree(biome_id, variant, seed_value, lod_level)
+			# Use new procedural tree generator
+			if _tree_generator:
+				var tree_style: int = _tree_generator.get_tree_style_for_biome(biome_id, seed_value)
+				mesh = _tree_generator.generate_tree_mesh(tree_style, seed_value, lod_level)
+			else:
+				mesh = TreeGenerator.generate_tree(biome_id, variant, seed_value, lod_level)
 		VegetationType.BUSH:
 			mesh = BushGenerator.generate_bush(biome_id, variant, seed_value, lod_level)
 		VegetationType.ROCK_SMALL:

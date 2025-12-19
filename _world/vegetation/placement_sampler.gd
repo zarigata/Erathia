@@ -78,7 +78,7 @@ func sample_chunk(
 	var placements: Array[Dictionary] = []
 	var veg_types: Array = rules.get("types", [])
 	var slope_max: float = rules.get("slope_max", 45.0)
-	var height_range: Dictionary = rules.get("height_range", {"min": -100, "max": 300})
+	var height_range: Dictionary = rules.get("height_range", {"min": -100, "max": 500})
 	
 	if veg_types.is_empty():
 		return placements
@@ -87,6 +87,10 @@ func sample_chunk(
 	var voxel_tool: VoxelTool = null
 	if terrain and terrain.has_method("get_voxel_tool"):
 		voxel_tool = terrain.get_voxel_tool()
+	
+	if voxel_tool == null:
+		push_warning("[PlacementSampler] No VoxelTool available for chunk %s" % chunk_origin)
+		return placements
 	
 	# Process each vegetation type
 	for veg_type_data: Dictionary in veg_types:
@@ -147,28 +151,40 @@ func check_placement_valid(
 
 
 ## Get surface position and normal at a world XZ coordinate
-func get_surface_info(voxel_tool: VoxelTool, world_x: float, world_z: float, search_height: float = 200.0) -> Dictionary:
+func get_surface_info(voxel_tool: VoxelTool, world_x: float, world_z: float, search_height: float = 300.0) -> Dictionary:
 	if voxel_tool == null:
 		return {}
 	
-	# Raycast from above to find surface
+	# Try using SDF sampling - look for sign change from positive (air) to negative (solid)
+	var sample_step: float = 4.0  # Larger steps for faster search
+	var prev_sdf: float = 100.0  # Start assuming we're in air
+	
+	for h in range(int(search_height), -100, -int(sample_step)):
+		var sample_pos := Vector3(world_x, float(h), world_z)
+		var sdf: float = voxel_tool.get_voxel_f(sample_pos)
+		
+		# Surface is where SDF crosses from positive to negative
+		if prev_sdf > 0.0 and sdf <= 0.0:
+			# Found surface - refine position
+			var surface_y: float = float(h) + sample_step * 0.5
+			var surface_pos := Vector3(world_x, surface_y, world_z)
+			return {
+				"position": surface_pos,
+				"normal": Vector3.UP  # Assume mostly flat for vegetation
+			}
+		prev_sdf = sdf
+	
+	# If SDF search failed, try direct raycast
 	var ray_origin := Vector3(world_x, search_height, world_z)
-	var ray_dir := Vector3.DOWN
-	var max_distance := search_height + 100.0
+	var result: VoxelRaycastResult = voxel_tool.raycast(ray_origin, Vector3.DOWN, search_height + 150.0)
 	
-	var result: VoxelRaycastResult = voxel_tool.raycast(ray_origin, ray_dir, max_distance)
+	if result != null:
+		return {
+			"position": result.position,
+			"normal": Vector3.UP
+		}
 	
-	if result == null:
-		return {}
-	
-	var hit_pos: Vector3 = result.position
-	# VoxelRaycastResult doesn't provide normal directly, estimate from SDF gradient
-	var hit_normal: Vector3 = _estimate_normal(voxel_tool, hit_pos)
-	
-	return {
-		"position": hit_pos,
-		"normal": hit_normal
-	}
+	return {}
 
 
 # =============================================================================

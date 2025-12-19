@@ -16,7 +16,14 @@ extends CanvasLayer
 @onready var vegetation_label: Label = $Panel/VBoxContainer/VegetationLabel
 @onready var fps_graph: Control = $Panel/VBoxContainer/FPSGraph
 
+# New world init status labels (optional - may not exist in scene)
+@onready var terrain_status_label: Label = $Panel/VBoxContainer/TerrainStatusLabel if has_node("Panel/VBoxContainer/TerrainStatusLabel") else null
+@onready var init_stage_label: Label = $Panel/VBoxContainer/InitStageLabel if has_node("Panel/VBoxContainer/InitStageLabel") else null
+@onready var biome_blending_label: Label = $Panel/VBoxContainer/BiomeBlendingLabel if has_node("Panel/VBoxContainer/BiomeBlendingLabel") else null
+
 var _visible: bool = false
+var _world_init_manager: Node = null
+var _biome_generator: BiomeAwareGenerator = null
 
 
 func _ready() -> void:
@@ -31,6 +38,20 @@ func _ready() -> void:
 	# Connect to PerformanceOverlay signals
 	if PerformanceOverlay:
 		PerformanceOverlay.metrics_updated.connect(_on_metrics_updated)
+	
+	# Find WorldInitManager
+	call_deferred("_find_world_init_manager")
+
+
+func _find_world_init_manager() -> void:
+	_world_init_manager = get_node_or_null("/root/WorldInitManager")
+	
+	# Find BiomeAwareGenerator from terrain
+	var root := get_tree().current_scene
+	if root:
+		var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+		if terrain and terrain.generator:
+			_biome_generator = terrain.generator as BiomeAwareGenerator
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -96,6 +117,71 @@ func _on_metrics_updated(data: Dictionary) -> void:
 		fps_graph.queue_redraw()
 	elif fps_graph:
 		fps_graph.visible = false
+	
+	# Update terrain/world init status
+	_update_terrain_status()
+	_update_init_stage()
+	_update_biome_blending_status()
+
+
+func _update_terrain_status() -> void:
+	if not terrain_status_label:
+		return
+	
+	var status_text := "Terrain: "
+	var status_color := Color.WHITE
+	
+	if _world_init_manager:
+		var stage: int = _world_init_manager.current_stage
+		match stage:
+			0:  # IDLE
+				status_text += "Idle"
+				status_color = Color.GRAY
+			1, 2, 3, 4, 5:  # Generating stages
+				status_text += "Generating"
+				status_color = Color.YELLOW
+			6:  # COMPLETE
+				status_text += "Ready"
+				status_color = Color.LIME
+			7:  # FAILED
+				status_text += "Failed"
+				status_color = Color.RED
+			_:
+				status_text += "Unknown"
+	else:
+		status_text += "Ready"
+		status_color = Color.LIME
+	
+	terrain_status_label.text = status_text
+	terrain_status_label.modulate = status_color
+
+
+func _update_init_stage() -> void:
+	if not init_stage_label:
+		return
+	
+	if _world_init_manager and _world_init_manager.is_initializing:
+		var stage_name: String = _world_init_manager.get_stage_name()
+		var progress: float = _world_init_manager.get_total_progress()
+		init_stage_label.text = "Init: %s (%.0f%%)" % [stage_name, progress * 100]
+		init_stage_label.visible = true
+	else:
+		init_stage_label.visible = false
+
+
+func _update_biome_blending_status() -> void:
+	if not biome_blending_label:
+		return
+	
+	if _biome_generator:
+		var strength: float = _biome_generator.height_modulation_strength
+		var status := "Disabled" if strength <= 0.0 else "Enabled (%.0f%%)" % (strength * 100)
+		var color := Color.GRAY if strength <= 0.0 else Color.LIME
+		biome_blending_label.text = "Biome Blending: %s" % status
+		biome_blending_label.modulate = color
+	else:
+		biome_blending_label.text = "Biome Blending: N/A"
+		biome_blending_label.modulate = Color.GRAY
 
 
 ## Apply settings from debug settings panel
