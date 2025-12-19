@@ -17,10 +17,28 @@ var static_body: StaticBody3D = null
 var _preview_material: Material = null
 var _original_materials: Array[Material] = []
 var _ghost_shader: Shader = null
+var _pending_mesh: Mesh = null
+var _pending_collision: Shape3D = null
+var _pending_material: Material = null
+
+
+func _init() -> void:
+	# Create nodes immediately so factory can set mesh/collision before _ready
+	_setup_nodes()
 
 
 func _ready() -> void:
-	_setup_nodes()
+	# Apply any pending mesh/collision that was set before being added to tree
+	if _pending_mesh and mesh_instance:
+		mesh_instance.mesh = _pending_mesh
+		_store_original_materials()
+		_pending_mesh = null
+	if _pending_collision and collision_shape:
+		collision_shape.shape = _pending_collision
+		_pending_collision = null
+	if _pending_material and mesh_instance:
+		mesh_instance.material_override = _pending_material
+		_pending_material = null
 	if piece_data:
 		_initialize_from_data()
 
@@ -46,14 +64,25 @@ func _initialize_from_data() -> void:
 
 
 func set_mesh(mesh: Mesh) -> void:
-	if mesh_instance:
+	if mesh_instance and is_inside_tree():
 		mesh_instance.mesh = mesh
 		_store_original_materials()
+	else:
+		_pending_mesh = mesh
 
 
 func set_collision(shape: Shape3D) -> void:
-	if collision_shape:
+	if collision_shape and is_inside_tree():
 		collision_shape.shape = shape
+	else:
+		_pending_collision = shape
+
+
+func set_material_override(material: Material) -> void:
+	if mesh_instance and is_inside_tree():
+		mesh_instance.material_override = material
+	else:
+		_pending_material = material
 
 
 func _store_original_materials() -> void:
@@ -152,33 +181,36 @@ func preview_mode(enabled: bool) -> void:
 	
 	if enabled:
 		if not _preview_material:
-			# Load ghost preview shader for X-ray effect
-			_ghost_shader = load("res://_assets/materials/ghost_preview.gdshader")
+			# Load X-ray preview shader
+			_ghost_shader = load("res://_building/shaders/building_preview.gdshader")
 			if _ghost_shader:
 				_preview_material = ShaderMaterial.new()
 				_preview_material.shader = _ghost_shader
-				_preview_material.set_shader_parameter("valid_color", Color(0.3, 1.0, 0.4, 0.6))
-				_preview_material.set_shader_parameter("invalid_color", Color(1.0, 0.3, 0.3, 0.6))
+				_preview_material.set_shader_parameter("valid_color", Vector3(0.2, 0.9, 0.3))
+				_preview_material.set_shader_parameter("invalid_color", Vector3(0.9, 0.2, 0.2))
 				_preview_material.set_shader_parameter("is_valid", true)
+				_preview_material.set_shader_parameter("alpha", 0.6)
+				_preview_material.set_shader_parameter("grid_scale", 2.0)
+				_preview_material.set_shader_parameter("grid_line_width", 0.08)
+				_preview_material.set_shader_parameter("pulse_speed", 2.0)
 				_preview_material.set_shader_parameter("fresnel_power", 2.0)
-				_preview_material.set_shader_parameter("grid_scale", 4.0)
 				_preview_material.render_priority = 1
 			else:
 				# Fallback to standard material if shader not found
 				var fallback := StandardMaterial3D.new()
 				fallback.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				fallback.albedo_color = Color(0.3, 0.7, 1.0, 0.5)
+				fallback.albedo_color = Color(0.3, 1.0, 0.3, 0.5)
 				fallback.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 				_preview_material = fallback
 		
-		for i in range(mesh_instance.mesh.get_surface_count() if mesh_instance.mesh else 0):
-			mesh_instance.set_surface_override_material(i, _preview_material)
+		# Apply preview material
+		mesh_instance.material_override = _preview_material
 		
 		if collision_shape:
 			collision_shape.disabled = true
 	else:
-		for i in range(_original_materials.size()):
-			mesh_instance.set_surface_override_material(i, _original_materials[i] if _original_materials[i] else null)
+		# Restore original material
+		mesh_instance.material_override = _pending_material
 		
 		if collision_shape:
 			collision_shape.disabled = false

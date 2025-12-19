@@ -1,0 +1,15 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://_building/shaders/building_preview.gdshader" id="1"]
+
+[resource]
+render_priority = 1
+shader = ExtResource("1")
+shader_parameter/valid_color = Vector3(0.2, 0.9, 0.3)
+shader_parameter/invalid_color = Vector3(0.9, 0.2, 0.2)
+shader_parameter/alpha = 0.6
+shader_parameter/grid_scale = 2.0
+shader_parameter/grid_line_width = 0.08
+shader_parameter/pulse_speed = 2.0
+shader_parameter/fresnel_power = 2.0
+shader_parameter/is_valid = true

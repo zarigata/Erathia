@@ -18,10 +18,12 @@ enum MaterialType {
 }
 
 enum SnapType {
-	EDGE,
-	CORNER,
-	SURFACE,
-	DOOR_FRAME
+	EDGE,           # Side edges of floors/walls - connects horizontally
+	CORNER,         # Corners of floors - connects diagonally
+	SURFACE,        # Top/bottom surfaces - connects vertically
+	DOOR_FRAME,     # Door placement on walls
+	FLOOR_EDGE,     # Floor edge where walls can attach (top surface edge)
+	WALL_BOTTOM     # Bottom of wall - attaches to floor edges
 }
 
 @export_group("Metadata")

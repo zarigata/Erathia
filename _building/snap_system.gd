@@ -22,11 +22,12 @@ signal preview_validity_changed(is_valid: bool)
 
 # Configuration
 @export_group("Snap Detection")
-@export var snap_detection_radius: float = 1.0
-@export var snap_alignment_threshold: float = 0.3
-@export var grid_size: float = 1.0
+@export var snap_detection_radius: float = 4.0  # Increased for better magnetic detection
+@export var snap_alignment_threshold: float = 3.0  # More permissive threshold
+@export var grid_size: float = 4.0  # Match floor size for grid alignment
 @export var preview_raycast_distance: float = 20.0
 @export var collision_check_enabled: bool = true
+@export var magnetic_snap_priority: bool = true  # Prioritize snapping to existing pieces
 
 # State variables
 var current_mode: BuildMode = BuildMode.IDLE
@@ -343,87 +344,214 @@ func _find_best_snap_point(cursor_position: Vector3) -> Dictionary:
 	if not preview_piece or nearby_placed_pieces.is_empty():
 		return {}
 	
-	# Get preview piece's snap points in world space
-	var preview_snaps: Array[Dictionary] = preview_piece.get_snap_point_data()
-	if preview_snaps.is_empty():
-		return {}
-	
 	var best_snap: Dictionary = {}
 	var best_score: float = INF
 	
+	# Get preview piece data for special handling
+	var preview_category: int = -1
+	if preview_piece.piece_data:
+		preview_category = preview_piece.piece_data.category
+	
 	for placed_piece in nearby_placed_pieces:
 		var placed_snaps: Array[Dictionary] = placed_piece.get_snap_point_data()
+		var placed_category: int = -1
+		if placed_piece.piece_data:
+			placed_category = placed_piece.piece_data.category
 		
-		for preview_snap in preview_snaps:
-			var preview_type: int = preview_snap.get("type", BuildPieceData.SnapType.EDGE)
-			var preview_compatible: Array = preview_snap.get("compatible_types", [])
-			
-			for placed_snap in placed_snaps:
-				var placed_type: int = placed_snap.get("type", BuildPieceData.SnapType.EDGE)
-				var placed_compatible: Array = placed_snap.get("compatible_types", [])
-				
-				# Check type compatibility (either direction)
-				var is_compatible: bool = false
-				if preview_compatible.has(placed_type) or placed_compatible.has(preview_type):
-					is_compatible = true
-				# Also allow same-type connections
-				if preview_type == placed_type:
-					is_compatible = true
-				
-				if not is_compatible:
-					continue
-				
-				# Calculate distance between snap points
-				var preview_world_pos: Vector3 = preview_snap.get("position", Vector3.ZERO)
-				var placed_world_pos: Vector3 = placed_snap.get("position", Vector3.ZERO)
-				
-				# We need to calculate where the preview piece would be if this snap aligned
-				# The preview snap point should align with the placed snap point
-				var preview_local_offset: Vector3 = preview_world_pos - preview_piece.global_position
-				var aligned_position: Vector3 = placed_world_pos - preview_local_offset
-				
-				# Distance from cursor to aligned position
-				var distance: float = cursor_position.distance_to(aligned_position)
-				
-				if distance > snap_detection_radius:
-					continue
-				
-				# Calculate alignment score (lower is better)
-				# Factor in normal alignment - normals should be opposite for good connection
-				var preview_normal: Vector3 = preview_snap.get("normal", Vector3.UP)
-				var placed_normal: Vector3 = placed_snap.get("normal", Vector3.UP)
-				var normal_alignment: float = preview_normal.dot(placed_normal)
-				
-				# Ideal alignment is -1 (opposite normals), penalize positive alignment
-				var alignment_penalty: float = (normal_alignment + 1.0) * 0.5  # 0 when opposite, 1 when same
-				var score: float = distance + alignment_penalty * snap_detection_radius
-				
-				if score < best_score:
-					best_score = score
-					best_snap = {
-						"position": placed_world_pos,
-						"normal": placed_normal,
-						"type": placed_type,
-						"aligned_position": aligned_position,
-						"preview_snap": preview_snap,
-						"placed_snap": placed_snap,
-						"placed_piece": placed_piece
-					}
-					
-					# Calculate aligned rotation based on snap normals
-					if placed_normal.length_squared() > 0.01 and preview_normal.length_squared() > 0.01:
-						var target_normal: Vector3 = -placed_normal  # Preview should face opposite
-						target_normal.y = 0.0
-						if target_normal.length_squared() > 0.01:
-							target_normal = target_normal.normalized()
-							best_snap["aligned_rotation"] = atan2(target_normal.x, target_normal.z)
+		# Find best snap point on this placed piece
+		var snap_result := _evaluate_snap_points_for_piece(
+			cursor_position, placed_piece, placed_snaps, 
+			preview_category, placed_category
+		)
+		
+		if not snap_result.is_empty() and snap_result.get("score", INF) < best_score:
+			best_score = snap_result.get("score", INF)
+			best_snap = snap_result
 	
-	# Only return if score is good enough
-	# Distance is already gated by snap_detection_radius above, so only check alignment threshold
+	# Return if we found a good snap
 	if best_score <= snap_alignment_threshold:
 		return best_snap
 	
 	return {}
+
+
+func _evaluate_snap_points_for_piece(cursor_pos: Vector3, placed_piece: BuildPiece, 
+		placed_snaps: Array[Dictionary], preview_category: int, placed_category: int) -> Dictionary:
+	
+	var best_result: Dictionary = {}
+	var best_score: float = INF
+	
+	# For walls on floors, we need special handling
+	var is_wall_on_floor: bool = (
+		preview_category == BuildPieceData.Category.WALL and 
+		placed_category == BuildPieceData.Category.FLOOR
+	)
+	
+	# For floors next to floors
+	var is_floor_to_floor: bool = (
+		preview_category == BuildPieceData.Category.FLOOR and 
+		placed_category == BuildPieceData.Category.FLOOR
+	)
+	
+	for placed_snap in placed_snaps:
+		var placed_type: int = placed_snap.get("type", BuildPieceData.SnapType.EDGE)
+		var placed_compatible: Array = placed_snap.get("compatible_types", [])
+		var placed_world_pos: Vector3 = placed_snap.get("position", Vector3.ZERO)
+		var placed_normal: Vector3 = placed_snap.get("normal", Vector3.UP)
+		
+		# Special case: Wall on Floor edge
+		if is_wall_on_floor and placed_type == BuildPieceData.SnapType.FLOOR_EDGE:
+			var result := _calculate_wall_on_floor_snap(cursor_pos, placed_piece, placed_snap)
+			if not result.is_empty():
+				var score: float = result.get("score", INF)
+				if score < best_score:
+					best_score = score
+					best_result = result
+			continue
+		
+		# Special case: Floor to Floor edge connection
+		if is_floor_to_floor and placed_type == BuildPieceData.SnapType.EDGE:
+			var result := _calculate_floor_to_floor_snap(cursor_pos, placed_piece, placed_snap)
+			if not result.is_empty():
+				var score: float = result.get("score", INF)
+				if score < best_score:
+					best_score = score
+					best_result = result
+			continue
+		
+		# Generic snap point matching
+		var preview_snaps: Array[Dictionary] = preview_piece.get_snap_point_data()
+		for preview_snap in preview_snaps:
+			var preview_type: int = preview_snap.get("type", BuildPieceData.SnapType.EDGE)
+			var preview_compatible: Array = preview_snap.get("compatible_types", [])
+			
+			# Check compatibility
+			var is_compatible: bool = (
+				preview_compatible.has(placed_type) or 
+				placed_compatible.has(preview_type) or
+				preview_type == placed_type
+			)
+			
+			if not is_compatible:
+				continue
+			
+			var preview_world_pos: Vector3 = preview_snap.get("position", Vector3.ZERO)
+			var preview_local_offset: Vector3 = preview_world_pos - preview_piece.global_position
+			var aligned_position: Vector3 = placed_world_pos - preview_local_offset
+			
+			var distance: float = cursor_pos.distance_to(aligned_position)
+			if distance > snap_detection_radius:
+				continue
+			
+			# Score calculation
+			var preview_normal: Vector3 = preview_snap.get("normal", Vector3.UP)
+			var normal_dot: float = preview_normal.dot(placed_normal)
+			var alignment_penalty: float = (normal_dot + 1.0) * 0.3
+			var score: float = distance + alignment_penalty
+			
+			if score < best_score:
+				best_score = score
+				best_result = _create_snap_result(
+					placed_world_pos, placed_normal, placed_type, aligned_position,
+					preview_snap, placed_snap, placed_piece, score, placed_normal
+				)
+	
+	return best_result
+
+
+func _calculate_wall_on_floor_snap(cursor_pos: Vector3, floor_piece: BuildPiece, 
+		floor_snap: Dictionary) -> Dictionary:
+	
+	var floor_edge_pos: Vector3 = floor_snap.get("position", Vector3.ZERO)
+	var floor_normal: Vector3 = floor_snap.get("normal", Vector3.FORWARD)
+	
+	# Wall should be positioned at floor edge, facing outward
+	# Wall's center bottom should align with floor edge
+	var wall_position: Vector3 = floor_edge_pos
+	
+	# Calculate rotation so wall faces outward from floor
+	var wall_rotation: float = atan2(floor_normal.x, floor_normal.z)
+	
+	# Distance from cursor to this potential position
+	var distance: float = cursor_pos.distance_to(wall_position)
+	if distance > snap_detection_radius:
+		return {}
+	
+	var score: float = distance * 0.5  # Prioritize wall-on-floor snapping
+	
+	return {
+		"position": floor_edge_pos,
+		"normal": floor_normal,
+		"type": BuildPieceData.SnapType.FLOOR_EDGE,
+		"aligned_position": wall_position,
+		"aligned_rotation": wall_rotation,
+		"preview_snap": {},
+		"placed_snap": floor_snap,
+		"placed_piece": floor_piece,
+		"score": score
+	}
+
+
+func _calculate_floor_to_floor_snap(cursor_pos: Vector3, placed_floor: BuildPiece,
+		placed_snap: Dictionary) -> Dictionary:
+	
+	var edge_pos: Vector3 = placed_snap.get("position", Vector3.ZERO)
+	var edge_normal: Vector3 = placed_snap.get("normal", Vector3.FORWARD)
+	
+	# New floor should be placed adjacent, offset by floor size in normal direction
+	var floor_size: float = grid_size
+	if preview_piece.piece_data:
+		floor_size = preview_piece.piece_data.dimensions.x
+	
+	var aligned_position: Vector3 = edge_pos + edge_normal * floor_size
+	aligned_position.y = placed_floor.global_position.y  # Match Y level
+	
+	var distance: float = cursor_pos.distance_to(aligned_position)
+	if distance > snap_detection_radius:
+		return {}
+	
+	var score: float = distance * 0.5  # Prioritize floor-to-floor
+	
+	# Keep same rotation as placed floor for consistency
+	var aligned_rotation: float = placed_floor.rotation.y
+	
+	return {
+		"position": edge_pos,
+		"normal": edge_normal,
+		"type": BuildPieceData.SnapType.EDGE,
+		"aligned_position": aligned_position,
+		"aligned_rotation": aligned_rotation,
+		"preview_snap": {},
+		"placed_snap": placed_snap,
+		"placed_piece": placed_floor,
+		"score": score
+	}
+
+
+func _create_snap_result(position: Vector3, normal: Vector3, type: int, 
+		aligned_pos: Vector3, preview_snap: Dictionary, placed_snap: Dictionary,
+		placed_piece: BuildPiece, score: float, placed_normal: Vector3) -> Dictionary:
+	
+	var result := {
+		"position": position,
+		"normal": normal,
+		"type": type,
+		"aligned_position": aligned_pos,
+		"preview_snap": preview_snap,
+		"placed_snap": placed_snap,
+		"placed_piece": placed_piece,
+		"score": score
+	}
+	
+	# Calculate rotation based on normal
+	if placed_normal.length_squared() > 0.01:
+		var target_normal: Vector3 = -placed_normal
+		target_normal.y = 0.0
+		if target_normal.length_squared() > 0.01:
+			target_normal = target_normal.normalized()
+			result["aligned_rotation"] = atan2(target_normal.x, target_normal.z)
+	
+	return result
 
 
 # ============================================================================
@@ -451,21 +579,24 @@ func _validate_placement() -> bool:
 		return false
 	
 	# Resource check
-	if not _check_resources():
+	var has_resources := _check_resources()
+	if not has_resources:
+		#print("Validation FAIL: No resources")
 		return false
 	
-	# Collision check
-	if collision_check_enabled and not _check_collision():
+	# Collision check (only with other placed pieces, not terrain)
+	var no_collision := _check_collision()
+	if collision_check_enabled and not no_collision:
+		#print("Validation FAIL: Collision with other piece")
 		return false
 	
-	# Terrain support check
-	if not _check_terrain_support():
+	# Terrain support check - MUST be near ground
+	var has_ground := _check_terrain_support()
+	if not has_ground:
+		#print("Validation FAIL: No ground support")
 		return false
 	
-	# Structural integrity check (placeholder for future)
-	if not _check_structural_integrity():
-		return false
-	
+	#print("Validation PASS: Resources=%s, NoCollision=%s, Ground=%s" % [has_resources, no_collision, has_ground])
 	return true
 
 
@@ -503,45 +634,98 @@ func _check_collision() -> bool:
 		Basis.from_euler(Vector3(0, preview_rotation, 0)),
 		preview_position
 	)
-	# Collision mask: detect terrain and other pieces (layers 1 and 2)
-	query.collision_mask = 0b11
+	# Only check collision with OTHER placed pieces (layer 2), NOT terrain
+	# Terrain collision is handled separately by ground detection
+	query.collision_mask = 0b10  # Only layer 2 (placed pieces)
 	query.exclude = []
 	
 	# Add preview piece's static body to exclusion if it exists
 	if preview_piece.static_body:
 		query.exclude.append(preview_piece.static_body.get_rid())
 	
-	# Check for intersections
+	# Check for intersections with other pieces
 	var results := space_state.intersect_shape(query, 1)
 	
-	# If any collision detected, placement is invalid
+	# If colliding with another placed piece, invalid
 	return results.is_empty()
 
 
 func _check_terrain_support() -> bool:
 	if not preview_piece or not preview_piece.piece_data:
-		return true
+		return false
 	
-	# Some categories don't need ground support
 	var category: int = preview_piece.piece_data.category
+	
+	# Roofs need to be attached to walls (snap point only)
 	if category == BuildPieceData.Category.ROOF:
-		return true  # Roofs can float (attached to walls)
+		return current_snap_mode == SnapMode.SNAP_POINT and not active_snap_point.is_empty()
 	
-	# For snap point placements, assume structural support from connected piece
+	# For snap point placements to existing pieces, always valid
 	if current_snap_mode == SnapMode.SNAP_POINT and not active_snap_point.is_empty():
-		return true
+		var placed_piece: BuildPiece = active_snap_point.get("placed_piece")
+		if placed_piece and placed_piece.is_placed:
+			return true
 	
-	# For grid placements, check terrain below
-	if not TerrainEditSystem:
-		return true
+	# For grid placements, check ground below using voxel terrain raycast
+	# This is the most reliable method for voxel terrain
+	return _check_ground_below_piece()
+
+
+func _check_ground_below_piece() -> bool:
+	# Ground check: terrain must be BELOW piece and CLOSE (within 1.5m)
+	# This prevents building floating in the sky
 	
-	# Raycast downward from piece center
-	var piece_height: float = preview_piece.piece_data.dimensions.y if preview_piece.piece_data else 2.0
-	var ray_origin: Vector3 = preview_position + Vector3(0, piece_height * 0.5, 0)
-	var hit := TerrainEditSystem.raycast(ray_origin, Vector3.DOWN, piece_height + 2.0)
+	var piece_y: float = preview_position.y
+	var terrain_y: float = -INF
+	var found_terrain: bool = false
 	
-	# Must have terrain within reasonable distance
-	return hit != null
+	# Try voxel terrain raycast first
+	if TerrainEditSystem:
+		var ray_start: Vector3 = preview_position + Vector3(0, 2.0, 0)
+		var hit := TerrainEditSystem.raycast(ray_start, Vector3.DOWN, 5.0)
+		
+		if hit != null:
+			terrain_y = hit.position.y
+			found_terrain = true
+	
+	# Backup: Physics raycast if voxel didn't find anything
+	if not found_terrain:
+		var physics_y := _get_terrain_y_physics()
+		if physics_y > -INF:
+			terrain_y = physics_y
+			found_terrain = true
+	
+	if not found_terrain:
+		return false  # No terrain found = can't build
+	
+	# Check: terrain must be BELOW or AT piece level, and within 1.5m
+	var height_above_terrain: float = piece_y - terrain_y
+	
+	# Valid: piece is between 0.5m below terrain (embedded) and 1.5m above terrain
+	return height_above_terrain >= -0.5 and height_above_terrain <= 1.5
+
+
+func _get_terrain_y_physics() -> float:
+	var space_state := get_viewport().get_world_3d().direct_space_state
+	if not space_state:
+		return -INF
+	
+	var from: Vector3 = preview_position + Vector3(0, 2.0, 0)
+	var to: Vector3 = preview_position + Vector3(0, -5.0, 0)
+	
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 0b01  # Only terrain
+	
+	var player := get_tree().get_first_node_in_group("player")
+	if player:
+		query.exclude = [player.get_rid()]
+	
+	var result := space_state.intersect_ray(query)
+	
+	if result.is_empty():
+		return -INF
+	
+	return result.position.y
 
 
 func _check_structural_integrity() -> bool:
@@ -579,7 +763,11 @@ func confirm_placement() -> bool:
 		push_error("SnapSystem: Failed to create piece '%s'" % piece_id)
 		return false
 	
-	# Set transform
+	# Add to scene FIRST (required before setting global_position)
+	_placed_pieces_container.add_child(placed_piece)
+	placed_piece.add_to_group("placed_pieces")
+	
+	# Now set transform (after being in tree)
 	placed_piece.global_position = preview_position
 	placed_piece.rotation.y = preview_rotation
 	
@@ -588,10 +776,6 @@ func confirm_placement() -> bool:
 	if not placed_piece.place(preview_position, preview_rotation, inventory_ref):
 		placed_piece.queue_free()
 		return false
-	
-	# Add to scene
-	_placed_pieces_container.add_child(placed_piece)
-	placed_piece.add_to_group("placed_pieces")
 	
 	# Emit signal
 	piece_placed.emit(placed_piece, preview_position)

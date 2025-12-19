@@ -822,19 +822,26 @@ func _add_wall_snap_points(data: BuildPieceData) -> void:
 	var half_width := data.dimensions.x / 2.0
 	var height := data.dimensions.y
 	
+	# Side edges - connect to other walls horizontally
 	data.add_snap_point(Vector3(-half_width, height / 2, 0), Vector3(-1, 0, 0), 
 			BuildPieceData.SnapType.EDGE, [BuildPieceData.SnapType.EDGE])
 	data.add_snap_point(Vector3(half_width, height / 2, 0), Vector3(1, 0, 0), 
 			BuildPieceData.SnapType.EDGE, [BuildPieceData.SnapType.EDGE])
+	
+	# Top surface - connect to roof or upper floor
 	data.add_snap_point(Vector3(0, height, 0), Vector3(0, 1, 0), 
-			BuildPieceData.SnapType.SURFACE, [BuildPieceData.SnapType.SURFACE])
+			BuildPieceData.SnapType.SURFACE, [BuildPieceData.SnapType.SURFACE, BuildPieceData.SnapType.FLOOR_EDGE])
+	
+	# Bottom - attaches to floor edges (WALL_BOTTOM connects to FLOOR_EDGE)
 	data.add_snap_point(Vector3(0, 0, 0), Vector3(0, -1, 0), 
-			BuildPieceData.SnapType.SURFACE, [BuildPieceData.SnapType.SURFACE])
+			BuildPieceData.SnapType.WALL_BOTTOM, [BuildPieceData.SnapType.FLOOR_EDGE, BuildPieceData.SnapType.SURFACE])
 
 
 func _add_floor_snap_points(data: BuildPieceData) -> void:
 	var half_size := data.dimensions.x / 2.0
+	var floor_height := data.dimensions.y  # Floor thickness
 	
+	# Side edges - for connecting floors horizontally
 	data.add_snap_point(Vector3(-half_size, 0, 0), Vector3(-1, 0, 0), 
 			BuildPieceData.SnapType.EDGE, [BuildPieceData.SnapType.EDGE])
 	data.add_snap_point(Vector3(half_size, 0, 0), Vector3(1, 0, 0), 
@@ -843,6 +850,19 @@ func _add_floor_snap_points(data: BuildPieceData) -> void:
 			BuildPieceData.SnapType.EDGE, [BuildPieceData.SnapType.EDGE])
 	data.add_snap_point(Vector3(0, 0, half_size), Vector3(0, 0, 1), 
 			BuildPieceData.SnapType.EDGE, [BuildPieceData.SnapType.EDGE])
+	
+	# Floor edges where walls can attach (on top surface at edges)
+	# These have upward-pointing normals and are positioned at the top of the floor
+	data.add_snap_point(Vector3(-half_size, floor_height, 0), Vector3(-1, 0, 0), 
+			BuildPieceData.SnapType.FLOOR_EDGE, [BuildPieceData.SnapType.WALL_BOTTOM])
+	data.add_snap_point(Vector3(half_size, floor_height, 0), Vector3(1, 0, 0), 
+			BuildPieceData.SnapType.FLOOR_EDGE, [BuildPieceData.SnapType.WALL_BOTTOM])
+	data.add_snap_point(Vector3(0, floor_height, -half_size), Vector3(0, 0, -1), 
+			BuildPieceData.SnapType.FLOOR_EDGE, [BuildPieceData.SnapType.WALL_BOTTOM])
+	data.add_snap_point(Vector3(0, floor_height, half_size), Vector3(0, 0, 1), 
+			BuildPieceData.SnapType.FLOOR_EDGE, [BuildPieceData.SnapType.WALL_BOTTOM])
+	
+	# Corners for diagonal connections
 	data.add_snap_point(Vector3(-half_size, 0, -half_size), Vector3(-1, 0, -1).normalized(), 
 			BuildPieceData.SnapType.CORNER, [BuildPieceData.SnapType.CORNER])
 	data.add_snap_point(Vector3(half_size, 0, -half_size), Vector3(1, 0, -1).normalized(), 

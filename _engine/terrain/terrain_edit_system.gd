@@ -303,8 +303,9 @@ func _apply_sphere_brush(center: Vector3, operation: Operation, radius: float, s
 			# Positive strength = expand/add terrain (building)
 			_voxel_tool.grow_sphere(center, radius, strength)
 		Operation.SMOOTH:
-			# Apply smoothing pass
-			_voxel_tool.smooth_sphere(center, radius, strength * 0.5)
+			# Apply smoothing pass (blur_radius must be 1-64)
+			var blur_radius: float = clampf(strength, 1.0, 64.0)
+			_voxel_tool.smooth_sphere(center, radius, blur_radius)
 
 
 func _apply_capsule_brush(center: Vector3, operation: Operation, radius: float, strength: float) -> void:
