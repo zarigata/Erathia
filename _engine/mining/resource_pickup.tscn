@@ -1,0 +1,50 @@
+[gd_scene load_steps=5 format=3 uid="uid://c8xqm7kv2yjnl"]
+
+[ext_resource type="Script" path="res://_engine/mining/resource_pickup.gd" id="1_pickup"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_body"]
+radius = 0.3
+
+[sub_resource type="SphereMesh" id="SphereMesh_visual"]
+radius = 0.25
+height = 0.5
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_pickup"]
+radius = 0.8
+
+[node name="ResourcePickup" type="RigidBody3D"]
+collision_layer = 4
+collision_mask = 1
+mass = 0.5
+script = ExtResource("1_pickup")
+enable_magnetic_attraction = true
+magnetic_range = 3.0
+invulnerability_duration = 30.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("SphereShape3D_body")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_visual")
+
+[node name="Label3D" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+pixel_size = 0.01
+text = "Resource"
+font_size = 32
+outline_size = 8
+
+[node name="PickupArea" type="Area3D" parent="."]
+collision_layer = 4
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PickupArea"]
+shape = SubResource("SphereShape3D_pickup")
+
+[node name="PickupTimer" type="Timer" parent="."]
+wait_time = 0.5
+one_shot = true
+
+[node name="LifetimeTimer" type="Timer" parent="."]
+wait_time = 300.0
+one_shot = true

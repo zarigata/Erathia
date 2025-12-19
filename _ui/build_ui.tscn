@@ -1,0 +1,125 @@
+[gd_scene load_steps=2 format=3 uid="uid://dv8k3m5nwq2xp"]
+
+[ext_resource type="Script" path="res://_ui/build_ui.gd" id="1_build_ui"]
+
+[node name="BuildUI" type="CanvasLayer"]
+layer = 10
+script = ExtResource("1_build_ui")
+
+[node name="Background" type="ColorRect" parent="."]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.3)
+
+[node name="BrowserPanel" type="PanelContainer" parent="."]
+visible = false
+custom_minimum_size = Vector2(280, 0)
+anchors_preset = 9
+anchor_right = 0.25
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="BrowserPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HeaderContainer" type="HBoxContainer" parent="BrowserPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="HeaderLabel" type="Label" parent="BrowserPanel/VBoxContainer/HeaderContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+text = "Building Pieces"
+
+[node name="CloseButton" type="Button" parent="BrowserPanel/VBoxContainer/HeaderContainer"]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+text = "✕"
+
+[node name="SearchContainer" type="HBoxContainer" parent="BrowserPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="SearchEdit" type="LineEdit" parent="BrowserPanel/VBoxContainer/SearchContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Search pieces..."
+clear_button_enabled = true
+
+[node name="TierFilterContainer" type="HBoxContainer" parent="BrowserPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="CategoryTabs" type="TabContainer" parent="BrowserPanel/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HUDOverlay" type="PanelContainer" parent="."]
+visible = false
+anchors_preset = 7
+anchor_left = 0.3
+anchor_top = 1.0
+anchor_right = 0.7
+anchor_bottom = 1.0
+offset_left = 0.0
+offset_top = -60.0
+offset_right = 0.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="HBoxContainer" type="HBoxContainer" parent="HUDOverlay"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="PieceNameLabel" type="Label" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Wood Wall"
+
+[node name="Separator1" type="VSeparator" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+
+[node name="CostDisplay" type="HBoxContainer" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Separator2" type="VSeparator" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+
+[node name="RotationLabel" type="Label" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "0°"
+
+[node name="Separator3" type="VSeparator" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+
+[node name="SnapModeLabel" type="Label" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "▦ Grid"
+
+[node name="ValidityIndicator" type="ColorRect" parent="HUDOverlay/HBoxContainer"]
+custom_minimum_size = Vector2(12, 12)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.3, 0.8, 0.3, 0.9)
+
+[node name="Separator4" type="VSeparator" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+
+[node name="KeybindHints" type="Label" parent="HUDOverlay/HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 10
+text = "[Q/E] Rotate  [LMB] Place  [RMB] Cancel"
+horizontal_alignment = 2

@@ -1,0 +1,12 @@
+[gd_resource type="VoxelGeneratorNoise" load_steps=2 format=3 uid="uid://bludlxegvqhoj"]
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_terrain"]
+noise_type = 0
+seed = 12345
+frequency = 0.005
+fractal_octaves = 4
+
+[resource]
+noise = SubResource("FastNoiseLite_terrain")
+height_start = 0.0
+height_range = 100.0

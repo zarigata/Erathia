@@ -1,0 +1,179 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6sdhroqj4pg0"]
+
+[ext_resource type="Script" path="res://_ui/debug_settings.gd" id="1_settings"]
+
+[node name="DebugSettings" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_settings")
+
+[node name="Panel" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -180.0
+offset_right = 200.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+
+[node name="TitleBar" type="HBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Panel/VBoxContainer/TitleBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Debug Settings"
+horizontal_alignment = 1
+
+[node name="CloseButton" type="Button" parent="Panel/VBoxContainer/TitleBar"]
+layout_mode = 2
+text = "X"
+
+[node name="TabContainer" type="TabContainer" parent="Panel"]
+layout_mode = 2
+offset_left = 4.0
+offset_top = 30.0
+offset_right = 396.0
+offset_bottom = 356.0
+
+[node name="Console" type="Control" parent="Panel/TabContainer"]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/TabContainer/Console"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="FontSizeContainer" type="HBoxContainer" parent="Panel/TabContainer/Console/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/Console/VBoxContainer/FontSizeContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Font Size"
+
+[node name="FontSizeSpinBox" type="SpinBox" parent="Panel/TabContainer/Console/VBoxContainer/FontSizeContainer"]
+layout_mode = 2
+min_value = 8.0
+max_value = 24.0
+value = 14.0
+
+[node name="HistoryLengthContainer" type="HBoxContainer" parent="Panel/TabContainer/Console/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/Console/VBoxContainer/HistoryLengthContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "History Length"
+
+[node name="HistoryLengthSpinBox" type="SpinBox" parent="Panel/TabContainer/Console/VBoxContainer/HistoryLengthContainer"]
+layout_mode = 2
+min_value = 10.0
+max_value = 200.0
+value = 50.0
+
+[node name="AutocompleteCheck" type="CheckBox" parent="Panel/TabContainer/Console/VBoxContainer"]
+layout_mode = 2
+button_pressed = true
+text = "Enable Autocomplete"
+
+[node name="Performance" type="Control" parent="Panel/TabContainer"]
+visible = false
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/TabContainer/Performance"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="UpdateRateContainer" type="HBoxContainer" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/Performance/VBoxContainer/UpdateRateContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Update Rate (s)"
+
+[node name="UpdateRateSpinBox" type="SpinBox" parent="Panel/TabContainer/Performance/VBoxContainer/UpdateRateContainer"]
+layout_mode = 2
+min_value = 0.05
+max_value = 1.0
+step = 0.05
+value = 0.1
+
+[node name="ShowGraphCheck" type="CheckBox" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+button_pressed = true
+text = "Show FPS Graph"
+
+[node name="XRay" type="Control" parent="Panel/TabContainer"]
+visible = false
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/TabContainer/XRay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="LabelDistanceContainer" type="HBoxContainer" parent="Panel/TabContainer/XRay/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/XRay/VBoxContainer/LabelDistanceContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Label Distance (m)"
+
+[node name="LabelDistanceSpinBox" type="SpinBox" parent="Panel/TabContainer/XRay/VBoxContainer/LabelDistanceContainer"]
+layout_mode = 2
+min_value = 10.0
+max_value = 100.0
+value = 50.0
+
+[node name="TransparencyContainer" type="HBoxContainer" parent="Panel/TabContainer/XRay/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/XRay/VBoxContainer/TransparencyContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Transparency"
+
+[node name="TransparencySlider" type="HSlider" parent="Panel/TabContainer/XRay/VBoxContainer/TransparencyContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+max_value = 1.0
+step = 0.05
+value = 0.3
+
+[connection signal="pressed" from="Panel/VBoxContainer/TitleBar/CloseButton" to="." method="_on_close_pressed"]
+[connection signal="value_changed" from="Panel/TabContainer/Console/VBoxContainer/FontSizeContainer/FontSizeSpinBox" to="." method="_on_font_size_changed"]
+[connection signal="value_changed" from="Panel/TabContainer/Console/VBoxContainer/HistoryLengthContainer/HistoryLengthSpinBox" to="." method="_on_history_length_changed"]
+[connection signal="toggled" from="Panel/TabContainer/Console/VBoxContainer/AutocompleteCheck" to="." method="_on_autocomplete_toggled"]
+[connection signal="value_changed" from="Panel/TabContainer/Performance/VBoxContainer/UpdateRateContainer/UpdateRateSpinBox" to="." method="_on_update_rate_changed"]
+[connection signal="toggled" from="Panel/TabContainer/Performance/VBoxContainer/ShowGraphCheck" to="." method="_on_show_graph_toggled"]
+[connection signal="value_changed" from="Panel/TabContainer/XRay/VBoxContainer/LabelDistanceContainer/LabelDistanceSpinBox" to="." method="_on_label_distance_changed"]
+[connection signal="value_changed" from="Panel/TabContainer/XRay/VBoxContainer/TransparencyContainer/TransparencySlider" to="." method="_on_transparency_changed"]

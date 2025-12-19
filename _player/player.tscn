@@ -1,0 +1,45 @@
+[gd_scene load_steps=7 format=3 uid="uid://bqx8k2m7v4yjr"]
+
+[ext_resource type="Script" path="res://_player/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://_player/tools/tool_manager.gd" id="2_tool_manager"]
+[ext_resource type="Script" path="res://_player/tools/tool_feedback.gd" id="3_tool_feedback"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_collision"]
+radius = 0.4
+height = 1.8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_placeholder"]
+albedo_color = Color(0.3, 0.5, 0.8, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_visual"]
+radius = 0.4
+height = 1.8
+material = SubResource("StandardMaterial3D_placeholder")
+
+[node name="Player" type="CharacterBody3D"]
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_collision")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_visual")
+
+[node name="CameraPivot" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 3)
+
+[node name="VoxelViewer" type="VoxelViewer" parent="CameraPivot/Camera3D"]
+
+[node name="ToolManager" type="Node" parent="."]
+script = ExtResource("2_tool_manager")
+terrain_edit_distance = 10.0
+
+[node name="ToolFeedback" type="Node" parent="."]
+script = ExtResource("3_tool_feedback")
+show_feedback_messages = true
+feedback_message_duration = 1.5

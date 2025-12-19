@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvk3m8qr2ypxd"]
+
+[ext_resource type="Script" path="res://_ui/cheat_indicators.gd" id="1_indicators"]
+
+[node name="CheatIndicators" type="CanvasLayer"]
+layer = 98
+script = ExtResource("1_indicators")
+
+[node name="Container" type="HBoxContainer" parent="."]
+visible = false
+anchors_preset = 0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 300.0
+offset_bottom = 40.0
+theme_override_constants/separation = 8
