@@ -14,7 +14,7 @@ const CHUNK_SIZE: int = 32
 const MAX_TREE_INSTANCES: int = 50000
 const MAX_BUSH_INSTANCES: int = 100000
 const MAX_ROCK_INSTANCES: int = 30000
-const MAX_GRASS_INSTANCES: int = 150000
+const MAX_GRASS_INSTANCES: int = 100000  # Reduced for performance
 
 # LOD distances (in meters)
 const LOD_DISTANCES: Array[float] = [64.0, 128.0, 256.0, 512.0]
@@ -25,7 +25,7 @@ const VISIBILITY_RANGES: Dictionary = {
 	VegetationManager.VegetationType.BUSH: 256.0,
 	VegetationManager.VegetationType.ROCK_SMALL: 192.0,
 	VegetationManager.VegetationType.ROCK_MEDIUM: 384.0,
-	VegetationManager.VegetationType.GRASS_TUFT: 128.0
+	VegetationManager.VegetationType.GRASS_TUFT: 64.0  # Reduced from 96m for performance
 }
 
 # =============================================================================
@@ -33,8 +33,8 @@ const VISIBILITY_RANGES: Dictionary = {
 # =============================================================================
 
 @export var enabled: bool = true
-@export var streaming_radius: int = 8  # Chunks around player to populate
-@export var world_seed: int = 12345
+@export var streaming_radius: int = 8  # Chunks around player to populate (reduced for performance)
+@export var debug_logging: bool = false
 
 # =============================================================================
 # STATE
@@ -59,7 +59,7 @@ var _player: Node3D
 
 # Processing state
 var _is_processing: bool = false
-var _chunks_per_frame: int = 1
+var _chunks_per_frame: int = 4  # Increased for faster streaming
 
 # =============================================================================
 # INITIALIZATION
@@ -75,8 +75,12 @@ func _ready() -> void:
 		push_warning("[VegetationInstancer] Parent is not VoxelLodTerrain")
 		return
 	
-	# Initialize placement sampler
-	_placement_sampler = PlacementSampler.new(world_seed)
+	# Initialize placement sampler with WorldSeedManager seed
+	var seed_value: int = 12345
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if seed_manager:
+		seed_value = seed_manager.get_world_seed()
+	_placement_sampler = PlacementSampler.new(seed_value)
 	
 	# Setup MultiMesh instances
 	_setup_multimesh_instances()
@@ -259,6 +263,10 @@ func _process_pending_chunks() -> void:
 # =============================================================================
 
 func _on_chunk_generated(chunk_origin: Vector3i, biome_id: int) -> void:
+	# Debug logging
+	if debug_logging:
+		print("[VegetationInstancer] chunk_generated signal received: origin=%s, biome_id=%d" % [chunk_origin, biome_id])
+	
 	# Mark this chunk as terrain-ready (LOD 0 generated)
 	_terrain_ready_chunks[chunk_origin] = true
 	
@@ -279,7 +287,7 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	if _populated_chunks.has(chunk_origin):
 		return
 	
-	# Comment 3: Check if terrain is ready for this chunk
+	# Check if terrain is ready for this chunk
 	# If we have the chunk_generated signal connected and this chunk hasn't been signaled yet,
 	# defer population until terrain is ready
 	if _terrain and _terrain.generator and _terrain.generator.has_signal("chunk_generated"):
@@ -293,6 +301,10 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	var chunk_center := Vector3(chunk_origin.x + CHUNK_SIZE * 0.5, 0, chunk_origin.z + CHUNK_SIZE * 0.5)
 	var biome_id := _get_biome_at_position(chunk_center)
 	
+	# Debug logging
+	if debug_logging:
+		print("[VegetationInstancer] Populating chunk: origin=%s, biome_id=%d" % [chunk_origin, biome_id])
+	
 	# Get vegetation rules for biome
 	var rules := VegetationManager.get_biome_rules(biome_id)
 	
@@ -305,7 +317,7 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 		rules
 	)
 	
-	# Comment 3: If placement yields zero results and terrain might not be ready,
+	# If placement yields zero results and terrain might not be ready,
 	# requeue the chunk for a later attempt instead of marking as populated
 	if placements.is_empty():
 		# Check if this could be due to missing surface data
@@ -316,6 +328,8 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 			if not chunk_origin in _deferred_chunks:
 				_deferred_chunks.append(chunk_origin)
 			return
+		if debug_logging and biome_types.is_empty():
+			print("[VegetationInstancer] Warning: Biome %d has no vegetation rules" % biome_id)
 	
 	# Add instances to MultiMeshes
 	for placement: Dictionary in placements:
@@ -444,6 +458,11 @@ func _add_instance(placement: Dictionary, chunk_origin: Vector3i) -> void:
 	# Get or set mesh for this specific variant
 	if mm.mesh == null:
 		var mesh := VegetationManager.get_mesh_for_type(veg_type, biome_id, variant, instance_seed, 0)
+		if not mesh:
+			# Fallback: use simple placeholder mesh
+			mesh = _create_placeholder_mesh(veg_type)
+			if debug_logging:
+				push_warning("[VegetationInstancer] Using fallback mesh for type %d variant %s" % [veg_type, variant])
 		if mesh:
 			mm.mesh = mesh
 	
@@ -469,6 +488,155 @@ func _add_instance(placement: Dictionary, chunk_origin: Vector3i) -> void:
 	
 	# Register with VegetationManager
 	VegetationManager.register_instance_position(position, chunk_origin, veg_type, transform)
+
+
+## Create a simple placeholder mesh when mesh generation fails
+func _create_placeholder_mesh(veg_type: int) -> Mesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	match veg_type:
+		VegetationManager.VegetationType.TREE:
+			# Simple cylinder trunk + cone canopy
+			_generate_simple_tree(st)
+		VegetationManager.VegetationType.BUSH:
+			# Simple sphere
+			_generate_simple_sphere(st, 0.5, Color(0.3, 0.5, 0.2))
+		VegetationManager.VegetationType.ROCK_SMALL, VegetationManager.VegetationType.ROCK_MEDIUM:
+			# Simple box
+			_generate_simple_box(st, 0.5, Color(0.5, 0.5, 0.5))
+		VegetationManager.VegetationType.GRASS_TUFT:
+			# Simple crossed quads
+			_generate_simple_grass(st)
+		_:
+			# Fallback cube
+			_generate_simple_box(st, 0.3, Color(1.0, 0.0, 1.0))
+	
+	st.generate_normals()
+	return st.commit()
+
+
+func _generate_simple_tree(st: SurfaceTool) -> void:
+	var trunk_color := Color(0.4, 0.25, 0.15)
+	var canopy_color := Color(0.2, 0.5, 0.15)
+	var trunk_height := 2.0
+	var trunk_radius := 0.15
+	var canopy_radius := 1.0
+	var canopy_height := 2.5
+	var segments := 6
+	
+	# Trunk (cylinder)
+	var angle_step := TAU / segments
+	for i in range(segments):
+		var a1 := i * angle_step
+		var a2 := (i + 1) * angle_step
+		var x1 := cos(a1) * trunk_radius
+		var z1 := sin(a1) * trunk_radius
+		var x2 := cos(a2) * trunk_radius
+		var z2 := sin(a2) * trunk_radius
+		
+		st.set_color(trunk_color)
+		st.add_vertex(Vector3(x1, 0, z1))
+		st.add_vertex(Vector3(x2, 0, z2))
+		st.add_vertex(Vector3(x2, trunk_height, z2))
+		
+		st.add_vertex(Vector3(x1, 0, z1))
+		st.add_vertex(Vector3(x2, trunk_height, z2))
+		st.add_vertex(Vector3(x1, trunk_height, z1))
+	
+	# Canopy (cone)
+	for i in range(segments):
+		var a1 := i * angle_step
+		var a2 := (i + 1) * angle_step
+		var x1 := cos(a1) * canopy_radius
+		var z1 := sin(a1) * canopy_radius
+		var x2 := cos(a2) * canopy_radius
+		var z2 := sin(a2) * canopy_radius
+		
+		st.set_color(canopy_color)
+		st.add_vertex(Vector3(x1, trunk_height, z1))
+		st.add_vertex(Vector3(x2, trunk_height, z2))
+		st.add_vertex(Vector3(0, trunk_height + canopy_height, 0))
+
+
+func _generate_simple_sphere(st: SurfaceTool, radius: float, color: Color) -> void:
+	var segments := 6
+	var rings := 4
+	
+	for i in range(segments):
+		for j in range(rings):
+			var theta1 := (float(i) / segments) * TAU
+			var theta2 := (float(i + 1) / segments) * TAU
+			var phi1 := (float(j) / rings) * PI
+			var phi2 := (float(j + 1) / rings) * PI
+			
+			var p1 := Vector3(sin(phi1) * cos(theta1), cos(phi1), sin(phi1) * sin(theta1)) * radius
+			var p2 := Vector3(sin(phi1) * cos(theta2), cos(phi1), sin(phi1) * sin(theta2)) * radius
+			var p3 := Vector3(sin(phi2) * cos(theta2), cos(phi2), sin(phi2) * sin(theta2)) * radius
+			var p4 := Vector3(sin(phi2) * cos(theta1), cos(phi2), sin(phi2) * sin(theta1)) * radius
+			
+			# Offset to ground level
+			p1.y += radius
+			p2.y += radius
+			p3.y += radius
+			p4.y += radius
+			
+			st.set_color(color)
+			st.add_vertex(p1)
+			st.add_vertex(p2)
+			st.add_vertex(p3)
+			
+			st.add_vertex(p1)
+			st.add_vertex(p3)
+			st.add_vertex(p4)
+
+
+func _generate_simple_box(st: SurfaceTool, size: float, color: Color) -> void:
+	var half := size * 0.5
+	var verts := [
+		Vector3(-half, 0, -half), Vector3(half, 0, -half),
+		Vector3(half, size, -half), Vector3(-half, size, -half),
+		Vector3(-half, 0, half), Vector3(half, 0, half),
+		Vector3(half, size, half), Vector3(-half, size, half)
+	]
+	var faces := [
+		[0, 1, 2, 3], [5, 4, 7, 6], [3, 2, 6, 7],
+		[4, 5, 1, 0], [1, 5, 6, 2], [4, 0, 3, 7]
+	]
+	
+	st.set_color(color)
+	for face in faces:
+		st.add_vertex(verts[face[0]])
+		st.add_vertex(verts[face[1]])
+		st.add_vertex(verts[face[2]])
+		st.add_vertex(verts[face[0]])
+		st.add_vertex(verts[face[2]])
+		st.add_vertex(verts[face[3]])
+
+
+func _generate_simple_grass(st: SurfaceTool) -> void:
+	var color := Color(0.35, 0.55, 0.2)
+	var height := 0.4
+	var width := 0.3
+	
+	# Two crossed quads
+	for rot in [0.0, PI / 2.0]:
+		var cos_r := cos(rot)
+		var sin_r := sin(rot)
+		var half_w := width * 0.5
+		var offset := Vector3(cos_r * half_w, 0, sin_r * half_w)
+		
+		st.set_color(color.darkened(0.2))
+		st.add_vertex(-offset)
+		st.add_vertex(offset)
+		st.set_color(color.lightened(0.1))
+		st.add_vertex(offset + Vector3(0, height, 0))
+		
+		st.set_color(color.darkened(0.2))
+		st.add_vertex(-offset)
+		st.set_color(color.lightened(0.1))
+		st.add_vertex(offset + Vector3(0, height, 0))
+		st.add_vertex(-offset + Vector3(0, height, 0))
 
 
 func _get_biome_at_position(world_pos: Vector3) -> int:

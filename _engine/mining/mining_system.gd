@@ -214,6 +214,9 @@ func spawn_pickup(resource_type: String, amount: int, position: Vector3, dropped
 		)
 		pickup.apply_impulse(impulse)
 		
+		# Explicitly enable magnetic attraction for mined resources
+		pickup.enable_magnetic_attraction = true
+		
 		# Mark as dropped by player for invulnerability
 		if dropped_by_player and pickup.has_method("set_dropped_by_player"):
 			pickup.set_dropped_by_player()

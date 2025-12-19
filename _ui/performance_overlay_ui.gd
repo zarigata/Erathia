@@ -11,6 +11,9 @@ extends CanvasLayer
 @onready var draw_calls_label: Label = $Panel/VBoxContainer/DrawCallsLabel
 @onready var position_label: Label = $Panel/VBoxContainer/PositionLabel
 @onready var biome_label: Label = $Panel/VBoxContainer/BiomeLabel
+@onready var seed_label: Label = $Panel/VBoxContainer/SeedLabel
+@onready var vsync_label: Label = $Panel/VBoxContainer/VSyncLabel
+@onready var vegetation_label: Label = $Panel/VBoxContainer/VegetationLabel
 @onready var fps_graph: Control = $Panel/VBoxContainer/FPSGraph
 
 var _visible: bool = false
@@ -66,6 +69,25 @@ func _on_metrics_updated(data: Dictionary) -> void:
 	
 	var biome: String = data.get("biome", "Unknown")
 	biome_label.text = "Biome: %s" % biome
+	
+	# World seed
+	var world_seed: String = data.get("world_seed", "N/A")
+	if seed_label:
+		seed_label.text = "Seed: %s" % world_seed
+	
+	# VSync and rendering status
+	var vsync_status: String = data.get("vsync_status", "Unknown")
+	var rendering_method: String = data.get("rendering_method", "forward_plus")
+	if vsync_label:
+		vsync_label.text = "VSync: %s | Renderer: %s" % [vsync_status, rendering_method]
+	
+	# Vegetation stats
+	var veg_stats: Dictionary = data.get("vegetation_stats", {})
+	var veg_total: int = veg_stats.get("total_instances", 0)
+	var veg_trees: int = veg_stats.get("tree_count", 0)
+	var veg_grass: int = veg_stats.get("grass_count", 0)
+	if vegetation_label:
+		vegetation_label.text = "Vegetation: %d (Trees: %d, Grass: %d)" % [veg_total, veg_trees, veg_grass]
 	
 	# Trigger graph redraw only if enabled
 	var show_graph: bool = data.get("show_graph", true)

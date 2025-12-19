@@ -13,7 +13,14 @@ const BADGE_COLORS: Dictionary = {
 	"fly": Color(0.3, 0.7, 1.0),      # Sky blue
 	"xray": Color(0.0, 1.0, 0.8),     # Cyan
 	"noclip": Color(1.0, 0.5, 0.0),   # Orange
-	"speed": Color(0.0, 1.0, 0.3)     # Green
+	"speed": Color(0.0, 1.0, 0.3),    # Green
+	"infinite_build": Color(1.0, 0.85, 0.0),  # Bright gold
+	"infinite_craft": Color(1.0, 0.85, 0.0)   # Bright gold
+}
+
+const BADGE_LABELS: Dictionary = {
+	"infinite_build": "∞ BUILD",
+	"infinite_craft": "∞ CRAFT"
 }
 
 
@@ -82,7 +89,7 @@ func _create_badge(cheat_name: String) -> PanelContainer:
 	
 	# Create label
 	var label := Label.new()
-	label.text = cheat_name.to_upper()
+	label.text = BADGE_LABELS.get(cheat_name, cheat_name.to_upper())
 	label.add_theme_font_size_override("font_size", 12)
 	label.add_theme_color_override("font_color", color)
 	badge.add_child(label)

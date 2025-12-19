@@ -52,6 +52,12 @@ theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_font_sizes/font_size = 20
 text = "Inventory (0/40)"
 
+[node name="SettingsButton" type="Button" parent="CenterContainer/MainPanel/VBoxContainer/HeaderContainer"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+tooltip_text = "Settings"
+text = "⚙"
+
 [node name="CloseButton" type="Button" parent="CenterContainer/MainPanel/VBoxContainer/HeaderContainer"]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2

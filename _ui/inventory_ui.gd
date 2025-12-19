@@ -14,9 +14,13 @@ extends CanvasLayer
 @onready var sort_button: Button = $CenterContainer/MainPanel/VBoxContainer/ControlsContainer/SortButton
 @onready var grid_container: GridContainer = $CenterContainer/MainPanel/VBoxContainer/ScrollContainer/GridContainer
 @onready var summary_label: Label = $CenterContainer/MainPanel/VBoxContainer/SummaryLabel
+@onready var settings_button: Button = $CenterContainer/MainPanel/VBoxContainer/HeaderContainer/SettingsButton
 
 ## Preloaded slot scene
 var _slot_scene: PackedScene = null
+
+## Settings UI reference
+var _settings_ui: CanvasLayer = null
 
 ## Currently dragged slot for visual feedback (reserved for future use)
 #var _dragged_slot_index: int = -1
@@ -52,6 +56,11 @@ func _ready() -> void:
 		sort_button.pressed.connect(_on_sort_button_pressed)
 	if filter_option:
 		filter_option.item_selected.connect(_on_filter_selected)
+	if settings_button:
+		settings_button.pressed.connect(_on_settings_button_pressed)
+	
+	# Setup settings UI
+	_setup_settings_ui()
 	
 	# Connect to Inventory signals
 	if Inventory:
@@ -263,3 +272,16 @@ func _on_item_added(_resource_type: String, _amount: int) -> void:
 func _on_item_removed(_resource_type: String, _amount: int) -> void:
 	update_title()
 	update_summary()
+
+
+func _setup_settings_ui() -> void:
+	# Load and instantiate settings UI
+	var settings_scene := preload("res://_ui/settings_ui.tscn")
+	_settings_ui = settings_scene.instantiate()
+	add_child(_settings_ui)
+	_settings_ui.visible = false
+
+
+func _on_settings_button_pressed() -> void:
+	if _settings_ui:
+		_settings_ui.open_settings(0)  # Open to Gameplay tab

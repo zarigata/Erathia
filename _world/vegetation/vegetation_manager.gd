@@ -40,7 +40,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.02, "variants": ["oak"]},
 			{"type": VegetationType.BUSH, "density": 0.1, "variants": ["green_bush", "flowering_bush"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.05, "variants": ["stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.3, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.15, "variants": ["grass"]}
 		],
 		"slope_max": 35.0,
 		"height_range": {"min": -10, "max": 100}
@@ -50,10 +50,10 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.15, "variants": ["oak", "birch", "pine"]},
 			{"type": VegetationType.BUSH, "density": 0.2, "variants": ["green_bush", "fern", "undergrowth"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.03, "variants": ["mossy_stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.25, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.12, "variants": ["grass"]}
 		],
-		"slope_max": 40.0,
-		"height_range": {"min": 0, "max": 120}
+		"slope_max": 50.0,
+		"height_range": {"min": -20, "max": 200}
 	},
 	MapGenerator.Biome.DESERT: {
 		"types": [
@@ -69,7 +69,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.08, "variants": ["willow", "dead"]},
 			{"type": VegetationType.BUSH, "density": 0.15, "variants": ["swamp_bush", "moss_clump"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.04, "variants": ["mossy_stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.2, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.1, "variants": ["grass"]}
 		],
 		"slope_max": 25.0,
 		"height_range": {"min": -40, "max": 50}
@@ -89,7 +89,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.2, "variants": ["palm", "tropical"]},
 			{"type": VegetationType.BUSH, "density": 0.3, "variants": ["tropical_bush", "fern", "giant_fern"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.02, "variants": ["mossy_stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.35, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.18, "variants": ["grass"]}
 		],
 		"slope_max": 45.0,
 		"height_range": {"min": -10, "max": 120}
@@ -99,7 +99,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.04, "variants": ["acacia"]},
 			{"type": VegetationType.BUSH, "density": 0.08, "variants": ["dry_bush", "grass_clump"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.04, "variants": ["stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.4, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.2, "variants": ["grass"]}
 		],
 		"slope_max": 30.0,
 		"height_range": {"min": 0, "max": 80}
@@ -111,8 +111,8 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.ROCK_SMALL, "density": 0.1, "variants": ["granite"]},
 			{"type": VegetationType.ROCK_MEDIUM, "density": 0.05, "variants": ["granite"]}
 		],
-		"slope_max": 50.0,
-		"height_range": {"min": 60, "max": 350}
+		"slope_max": 55.0,
+		"height_range": {"min": 40, "max": 400}
 	},
 	MapGenerator.Biome.BEACH: {
 		"types": [

@@ -13,13 +13,13 @@ extends RigidBody3D
 ## Time before pickup despawns (seconds)
 @export var lifetime: float = 300.0
 ## Distance at which pickup is attracted to player (0 = disabled)
-@export var magnetic_range: float = 0.0
+@export var magnetic_range: float = 3.0
 ## Speed of magnetic attraction
 @export var magnetic_speed: float = 8.0
 ## Enable magnetic attraction behavior
-@export var enable_magnetic_attraction: bool = false
+@export var enable_magnetic_attraction: bool = true
 ## Duration of invulnerability after being dropped by player
-@export var invulnerability_duration: float = 2.0
+@export var invulnerability_duration: float = 30.0
 
 ## Whether pickup can be collected yet
 var can_be_picked_up: bool = false
@@ -100,8 +100,12 @@ func _physics_process(delta: float) -> void:
 		var bob_amount: float = sin(_time_alive * 3.0 + _bob_offset) * 0.1
 		global_position.y = _base_y + bob_amount
 	
-	# Magnetic attraction to player (only if enabled)
-	if enable_magnetic_attraction and can_be_picked_up and invulnerability_timer <= 0.0 and _player and is_instance_valid(_player):
+	# Magnetic attraction to player (only if enabled and auto-collect is on)
+	var auto_collect_enabled: bool = true
+	if GameSettings:
+		auto_collect_enabled = GameSettings.is_auto_collect_enabled()
+	
+	if enable_magnetic_attraction and can_be_picked_up and invulnerability_timer <= 0.0 and auto_collect_enabled and _player and is_instance_valid(_player):
 		var distance: float = global_position.distance_to(_player.global_position)
 		
 		if distance < magnetic_range and magnetic_range > 0.0:
@@ -110,10 +114,19 @@ func _physics_process(delta: float) -> void:
 			freeze = true
 			var direction: Vector3 = (_player.global_position - global_position).normalized()
 			global_position += direction * magnetic_speed * delta
+			
+			# Check if close enough to collect (since physics is frozen, Area3D won't trigger)
+			if distance < 1.0:
+				_collect()
+				return
 		elif _is_attracted:
 			# Was attracted but player moved away
 			_is_attracted = false
 			freeze = false
+	elif _is_attracted and not auto_collect_enabled:
+		# Auto-collect was disabled while attracted
+		_is_attracted = false
+		freeze = false
 
 
 func _setup_visuals() -> void:
@@ -177,8 +190,11 @@ func _on_pickup_area_body_entered(body: Node3D) -> void:
 	# Check if body is player - mark as nearby but don't auto-collect
 	if body.is_in_group("player") or body.name == "Player":
 		_player_nearby = true
-		# Only auto-collect if magnetic attraction is enabled and not invulnerable
-		if enable_magnetic_attraction and invulnerability_timer <= 0.0:
+		# Only auto-collect if magnetic attraction is enabled, not invulnerable, and auto-collect setting is on
+		var auto_collect_enabled: bool = true
+		if GameSettings:
+			auto_collect_enabled = GameSettings.is_auto_collect_enabled()
+		if enable_magnetic_attraction and invulnerability_timer <= 0.0 and auto_collect_enabled:
 			_collect()
 
 

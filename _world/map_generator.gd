@@ -122,6 +122,7 @@ var _faction_noise: FastNoiseLite
 # =============================================================================
 
 @export var world_seed: int = 12345
+@export var auto_generate_on_ready: bool = true
 @export var generate_map: bool = false:
 	set(value):
 		if value:
@@ -138,8 +139,39 @@ var _faction_noise: FastNoiseLite
 # INITIALIZATION
 # =============================================================================
 
+signal map_generated(seed_value: int)
+signal seed_randomized(new_seed: int)
+
 func _ready() -> void:
+	# Get seed from WorldSeedManager if available (use get_node to avoid @tool parsing issues)
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if seed_manager:
+		world_seed = seed_manager.get_world_seed()
+		seed_manager.seed_changed.connect(_on_world_seed_changed)
+	
 	_setup_noise_layers()
+	
+	# Auto-generate world map if missing
+	if auto_generate_on_ready:
+		call_deferred("_check_and_generate_map")
+
+
+func _check_and_generate_map() -> void:
+	var map_path := "res://_assets/world_map.png"
+	if not FileAccess.file_exists(map_path):
+		print("[MapGenerator] World map not found, generating...")
+		generate_world_map()
+	else:
+		print("[MapGenerator] World map exists at: %s" % map_path)
+		map_generated.emit(world_seed)
+
+
+func _on_world_seed_changed(new_seed: int) -> void:
+	world_seed = new_seed
+	_setup_noise_layers()
+	print("[MapGenerator] Seed changed to: %d, regenerating map..." % new_seed)
+	generate_world_map()
+	seed_randomized.emit(new_seed)
 
 
 func _setup_noise_layers() -> void:
@@ -361,6 +393,9 @@ func generate_world_map() -> void:
 	
 	print("[MapGenerator] Progress: 100%%")
 	print("[MapGenerator] World map saved to: %s" % save_path)
+	
+	# Emit signal that map is ready
+	map_generated.emit(world_seed)
 	
 	# Print statistics
 	print("\n[MapGenerator] === BIOME DISTRIBUTION ===")

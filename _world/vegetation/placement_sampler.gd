@@ -29,7 +29,7 @@ const NOISE_FREQUENCY: Dictionary = {
 
 # Minimum distance between same-type instances
 const MIN_DISTANCE: Dictionary = {
-	VegetationManager.VegetationType.TREE: 3.0,
+	VegetationManager.VegetationType.TREE: 2.0,
 	VegetationManager.VegetationType.BUSH: 1.0,
 	VegetationManager.VegetationType.ROCK_SMALL: 1.5,
 	VegetationManager.VegetationType.ROCK_MEDIUM: 4.0,

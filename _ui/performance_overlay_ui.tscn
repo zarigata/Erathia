@@ -54,7 +54,22 @@ text = "Pos: (0.0, 0.0, 0.0)"
 layout_mode = 2
 text = "Biome: Unknown"
 
+[node name="SeedLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Seed: N/A"
+
 [node name="HSeparator3" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="VSyncLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "VSync: Unknown | Renderer: forward_plus"
+
+[node name="VegetationLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Vegetation: 0 (Trees: 0, Grass: 0)"
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/VBoxContainer"]
 layout_mode = 2
 
 [node name="FPSGraph" type="Control" parent="Panel/VBoxContainer"]

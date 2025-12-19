@@ -1,21 +1,30 @@
 shader_type spatial;
 
-// Material colors (index 0=air, 1=dirt, 2=stone, 3=iron_ore)
+// Material colors (index 0=air, 1=dirt, 2=stone, 3=iron_ore, 4=sand, 5=snow, 6=grass)
 uniform vec3 dirt_color : source_color = vec3(0.4, 0.35, 0.25);
 uniform vec3 stone_color : source_color = vec3(0.5, 0.5, 0.5);
 uniform vec3 iron_ore_color : source_color = vec3(0.6, 0.4, 0.2);
 uniform vec3 air_color : source_color = vec3(0.0, 0.0, 0.0);
+uniform vec3 sand_color : source_color = vec3(0.85, 0.75, 0.55);
+uniform vec3 snow_color : source_color = vec3(0.95, 0.97, 1.0);
+uniform vec3 grass_color : source_color = vec3(0.35, 0.55, 0.25);
 
 // Per-material roughness and metallic
 uniform float dirt_roughness : hint_range(0.0, 1.0) = 0.9;
 uniform float stone_roughness : hint_range(0.0, 1.0) = 0.8;
 uniform float ore_roughness : hint_range(0.0, 1.0) = 0.6;
 uniform float ore_metallic : hint_range(0.0, 1.0) = 0.4;
+uniform float sand_roughness : hint_range(0.0, 1.0) = 0.95;
+uniform float snow_roughness : hint_range(0.0, 1.0) = 0.7;
+uniform float grass_roughness : hint_range(0.0, 1.0) = 0.85;
 
 // Procedural noise scales per material
 uniform float dirt_noise_scale : hint_range(0.01, 2.0) = 0.5;
 uniform float stone_noise_scale : hint_range(0.01, 2.0) = 0.3;
 uniform float ore_noise_scale : hint_range(0.01, 2.0) = 0.2;
+uniform float sand_noise_scale : hint_range(0.01, 2.0) = 0.4;
+uniform float snow_noise_scale : hint_range(0.01, 2.0) = 0.15;
+uniform float grass_noise_scale : hint_range(0.01, 2.0) = 0.6;
 
 // Global parameters
 uniform float blend_sharpness : hint_range(0.1, 10.0) = 2.0;
@@ -187,38 +196,50 @@ void fragment() {
     int mat_low = int(floor(v_material_index));
     int mat_high = int(ceil(v_material_index));
     
-    // Clamp material IDs to valid range
-    mat_low = clamp(mat_low, 0, 3);
-    mat_high = clamp(mat_high, 0, 3);
-    material_id = clamp(material_id, 0, 3);
+    // Clamp material IDs to valid range (0-6)
+    mat_low = clamp(mat_low, 0, 6);
+    mat_high = clamp(mat_high, 0, 6);
+    material_id = clamp(material_id, 0, 6);
     
     // Base colors for each material
-    vec3 colors[4];
+    vec3 colors[7];
     colors[0] = air_color;
     colors[1] = dirt_color;
     colors[2] = stone_color;
     colors[3] = iron_ore_color;
+    colors[4] = sand_color;
+    colors[5] = snow_color;
+    colors[6] = grass_color;
     
     // Roughness for each material
-    float roughness_vals[4];
+    float roughness_vals[7];
     roughness_vals[0] = dirt_roughness;
     roughness_vals[1] = dirt_roughness;
     roughness_vals[2] = stone_roughness;
     roughness_vals[3] = ore_roughness;
+    roughness_vals[4] = sand_roughness;
+    roughness_vals[5] = snow_roughness;
+    roughness_vals[6] = grass_roughness;
     
     // Metallic for each material
-    float metallic_vals[4];
+    float metallic_vals[7];
     metallic_vals[0] = 0.0;
     metallic_vals[1] = 0.0;
     metallic_vals[2] = 0.0;
     metallic_vals[3] = ore_metallic;
+    metallic_vals[4] = 0.0;
+    metallic_vals[5] = 0.0;
+    metallic_vals[6] = 0.0;
     
     // Noise scales for each material
-    float noise_scales[4];
+    float noise_scales[7];
     noise_scales[0] = dirt_noise_scale;
     noise_scales[1] = dirt_noise_scale;
     noise_scales[2] = stone_noise_scale;
     noise_scales[3] = ore_noise_scale;
+    noise_scales[4] = sand_noise_scale;
+    noise_scales[5] = snow_noise_scale;
+    noise_scales[6] = grass_noise_scale;
     
     // Calculate blended properties
     vec3 base_color;

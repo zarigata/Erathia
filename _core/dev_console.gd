@@ -14,6 +14,8 @@ var fly_mode: bool = false
 var xray_mode: bool = false
 var noclip_mode: bool = false
 var speed_multiplier: float = 1.0
+var infinite_building: bool = false
+var infinite_crafting: bool = false
 
 # Command registry: maps command name to callable
 var _commands: Dictionary = {}
@@ -65,6 +67,18 @@ func _register_core_commands() -> void:
 	register_command("veg_toggle", _cmd_veg_toggle, "Toggle vegetation type: veg_toggle <tree|bush|rock|grass>")
 	register_command("veg_show_zones", _cmd_veg_show_zones, "Toggle vegetation placement zone visualization")
 	register_command("veg_clear_cache", _cmd_veg_clear_cache, "Clear vegetation mesh cache")
+	# World seed commands
+	register_command("show_seed", _cmd_show_seed, "Show current world seed")
+	register_command("set_seed", _cmd_set_seed, "Set world seed: set_seed <value>")
+	register_command("regenerate_world", _cmd_regenerate_world, "Generate new random seed and regenerate world")
+	register_command("reload_biomes", _cmd_reload_biomes, "Force reload biome map from disk")
+	# Pickup/collection commands
+	register_command("autocollect", _cmd_autocollect, "Toggle auto-collection: autocollect <on|off>")
+	register_command("spawn_pickup", _cmd_spawn_pickup, "Spawn pickup at player: spawn_pickup <resource_type> <amount>")
+	register_command("clear_pickups", _cmd_clear_pickups, "Remove all pickups in scene")
+	# Building cheat commands
+	register_command("infinite_build", _cmd_infinite_build, "Toggle infinite building (no resource cost)")
+	register_command("infinite_craft", _cmd_infinite_craft, "Toggle infinite crafting (no resource cost)")
 
 
 ## Register a new command
@@ -311,15 +325,20 @@ func _cmd_clear_inventory(args: Array[String]) -> String:
 
 
 func _cmd_reload_terrain(args: Array[String]) -> String:
-	var terrain_nodes := get_tree().get_nodes_in_group("terrain")
-	if terrain_nodes.is_empty():
-		return "Error: No terrain found"
+	var root := get_tree().current_scene
+	if not root:
+		return "Error: No current scene"
 	
-	for terrain in terrain_nodes:
-		if terrain.has_method("restart_stream"):
-			terrain.restart_stream()
+	var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+	if not terrain:
+		return "Error: VoxelLodTerrain not found"
 	
-	return "Terrain regeneration triggered"
+	# Force terrain regeneration by reassigning the generator
+	if terrain.generator:
+		terrain.generator = terrain.generator
+		return "Terrain regeneration triggered"
+	
+	return "Error: No generator assigned to terrain"
 
 
 func _cmd_cheats(args: Array[String]) -> String:
@@ -334,6 +353,10 @@ func _cmd_cheats(args: Array[String]) -> String:
 		active.append("noclip")
 	if speed_multiplier != 1.0:
 		active.append("speed (%.1fx)" % speed_multiplier)
+	if infinite_building:
+		active.append("infinite_build")
+	if infinite_crafting:
+		active.append("infinite_craft")
 	
 	if active.is_empty():
 		return "No cheats active"
@@ -461,3 +484,131 @@ func _get_vegetation_debug() -> Node:
 		if terrain:
 			return terrain.get_node_or_null("VegetationDebug")
 	return null
+
+
+# =============================================================================
+# WORLD SEED COMMANDS
+# =============================================================================
+
+func _cmd_show_seed(args: Array[String]) -> String:
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if not seed_manager:
+		return "Error: WorldSeedManager not available"
+	
+	return "Current world seed: %d" % seed_manager.get_world_seed()
+
+
+func _cmd_set_seed(args: Array[String]) -> String:
+	if args.is_empty():
+		return "Error: Usage: set_seed <value>"
+	
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if not seed_manager:
+		return "Error: WorldSeedManager not available"
+	
+	var seed_value := args[0].to_int()
+	if seed_value <= 0:
+		return "Error: Seed must be a positive integer"
+	
+	seed_manager.set_world_seed(seed_value)
+	return "World seed set to: %d (terrain will regenerate)" % seed_value
+
+
+func _cmd_regenerate_world(args: Array[String]) -> String:
+	var seed_manager = get_node_or_null("/root/WorldSeedManager")
+	if not seed_manager:
+		return "Error: WorldSeedManager not available"
+	
+	seed_manager.regenerate_seed()
+	return "New world seed generated: %d (terrain regenerating...)" % seed_manager.get_world_seed()
+
+
+func _cmd_reload_biomes(args: Array[String]) -> String:
+	var root := get_tree().current_scene
+	if not root:
+		return "Error: No current scene"
+	
+	var terrain := root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+	if not terrain or not terrain.generator:
+		return "Error: VoxelLodTerrain or generator not found"
+	
+	var biome_gen := terrain.generator as BiomeGenerator
+	if not biome_gen:
+		return "Error: BiomeGenerator not found"
+	
+	biome_gen.reload_world_map_and_notify()
+	return "Biome map reloaded from disk"
+
+
+# =============================================================================
+# PICKUP/COLLECTION COMMANDS
+# =============================================================================
+
+func _cmd_autocollect(args: Array[String]) -> String:
+	if not GameSettings:
+		return "Error: GameSettings not available"
+	
+	if args.is_empty():
+		var current: bool = GameSettings.is_auto_collect_enabled()
+		return "Auto-collect is currently: %s" % ("ON" if current else "OFF")
+	
+	var value := args[0].to_lower()
+	match value:
+		"on", "true", "1":
+			GameSettings.set_setting("gameplay.auto_collect_items", true)
+			return "Auto-collect: ON"
+		"off", "false", "0":
+			GameSettings.set_setting("gameplay.auto_collect_items", false)
+			return "Auto-collect: OFF"
+		_:
+			return "Error: Usage: autocollect <on|off>"
+
+
+func _cmd_spawn_pickup(args: Array[String]) -> String:
+	if args.size() < 2:
+		return "Error: Usage: spawn_pickup <resource_type> <amount>"
+	
+	var resource_type := args[0].to_lower()
+	var amount := args[1].to_int()
+	
+	if amount <= 0:
+		return "Error: Amount must be positive"
+	
+	var player := _get_player()
+	if not player:
+		return "Error: Player not found"
+	
+	if not MiningSystem:
+		return "Error: MiningSystem not available"
+	
+	# Spawn pickup at player position with slight offset
+	var spawn_pos: Vector3 = player.global_position + Vector3(0, 1.5, 0)
+	MiningSystem.spawn_pickup(resource_type, amount, spawn_pos, false)
+	
+	return "Spawned %s x%d at player position" % [resource_type, amount]
+
+
+func _cmd_clear_pickups(args: Array[String]) -> String:
+	var pickups := get_tree().get_nodes_in_group("pickups")
+	var count := pickups.size()
+	
+	for pickup in pickups:
+		pickup.queue_free()
+	
+	return "Cleared %d pickups" % count
+
+
+# =============================================================================
+# BUILDING CHEAT COMMANDS
+# =============================================================================
+
+func _cmd_infinite_build(args: Array[String]) -> String:
+	infinite_building = not infinite_building
+	cheat_toggled.emit("infinite_build", infinite_building)
+	return "Infinite building: %s" % ("ON" if infinite_building else "OFF")
+
+
+func _cmd_infinite_craft(args: Array[String]) -> String:
+	infinite_crafting = not infinite_crafting
+	cheat_toggled.emit("infinite_craft", infinite_crafting)
+	return "Infinite crafting: %s" % ("ON" if infinite_crafting else "OFF")

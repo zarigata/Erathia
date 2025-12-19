@@ -154,6 +154,62 @@ static func generate_tree(biome_id: int, variant: String, seed_value: int, lod_l
 		_generate_canopy(st, height, canopy_radius, canopy_segments, leaves_color, variant, rng)
 	
 	st.generate_normals()
+	var mesh := st.commit()
+	
+	# Validate mesh was generated successfully
+	if mesh == null or mesh.get_surface_count() == 0:
+		push_warning("[TreeGenerator] Failed to generate mesh for variant %s, using fallback" % variant)
+		return _fallback_tree_mesh()
+	
+	return mesh
+
+
+## Generate a simple fallback tree mesh
+static func _fallback_tree_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	var trunk_color := Color(0.4, 0.25, 0.15)
+	var canopy_color := Color(0.2, 0.5, 0.15)
+	var height := 5.0
+	var trunk_radius := 0.2
+	var canopy_radius := 1.5
+	var segments := 4
+	
+	# Simple trunk
+	var angle_step := TAU / segments
+	for i in range(segments):
+		var a1 := i * angle_step
+		var a2 := (i + 1) * angle_step
+		var x1 := cos(a1) * trunk_radius
+		var z1 := sin(a1) * trunk_radius
+		var x2 := cos(a2) * trunk_radius
+		var z2 := sin(a2) * trunk_radius
+		
+		st.set_color(trunk_color)
+		st.add_vertex(Vector3(x1, 0, z1))
+		st.add_vertex(Vector3(x2, 0, z2))
+		st.add_vertex(Vector3(x2, height * 0.5, z2))
+		
+		st.add_vertex(Vector3(x1, 0, z1))
+		st.add_vertex(Vector3(x2, height * 0.5, z2))
+		st.add_vertex(Vector3(x1, height * 0.5, z1))
+	
+	# Simple cone canopy
+	for i in range(segments):
+		var a1 := i * angle_step
+		var a2 := (i + 1) * angle_step
+		var x1 := cos(a1) * canopy_radius
+		var z1 := sin(a1) * canopy_radius
+		var x2 := cos(a2) * canopy_radius
+		var z2 := sin(a2) * canopy_radius
+		
+		st.set_color(canopy_color)
+		st.add_vertex(Vector3(x1, height * 0.5, z1))
+		st.add_vertex(Vector3(x2, height * 0.5, z2))
+		st.add_vertex(Vector3(0, height, 0))
+	
+	st.generate_normals()
 	return st.commit()
 
 

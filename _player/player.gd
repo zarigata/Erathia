@@ -3,6 +3,9 @@ extends CharacterBody3D
 # Camera mode enum
 enum CameraMode { THIRD_PERSON, FIRST_PERSON }
 
+# SnapSystem reference for build mode checks
+@onready var snap_system: Node = get_node_or_null("/root/SnapSystem")
+
 # Movement parameters
 @export_group("Movement")
 @export var walk_speed: float = 5.0
@@ -307,12 +310,21 @@ func _handle_camera_toggle(event: InputEvent) -> void:
 
 
 func _handle_tool_switching(event: InputEvent) -> void:
+	# Don't switch tools while in build mode
+	if tool_manager and tool_manager.is_in_build_mode():
+		return
+	
 	if event.is_action_pressed("equip_pickaxe") and pickaxe_instance:
 		if tool_manager:
 			tool_manager.equip_tool(pickaxe_instance)
 	elif event.is_action_pressed("equip_shovel") and shovel_instance:
 		if tool_manager:
 			tool_manager.equip_tool(shovel_instance)
+	elif event.is_action_pressed("equip_hoe") and hoe_instance:
+		if tool_manager:
+			tool_manager.equip_tool(hoe_instance)
+			if tool_feedback:
+				tool_feedback.show_message("Hoe equipped")
 	elif event.is_action_pressed("toggle_smooth_mode"):
 		var current_tool := tool_manager.get_current_tool() if tool_manager else null
 		if current_tool is Shovel:
@@ -364,16 +376,21 @@ func _on_cheat_toggled(cheat_name: String, enabled: bool) -> void:
 
 
 func _handle_fly_movement(delta: float, direction: Vector3) -> void:
-	# Vertical movement with jump/crouch
+	# Vertical movement with jump (ascend) and fly_descend (C key)
 	var vertical_input := 0.0
 	if Input.is_action_pressed("jump"):
 		vertical_input = 1.0
-	elif Input.is_action_pressed("sprint"):
+	elif Input.is_action_pressed("fly_descend"):
 		vertical_input = -1.0
 	
 	direction.y = vertical_input
 	
-	var fly_speed := sprint_speed * speed_multiplier * 1.5
+	# Base fly speed with speed multiplier
+	var fly_speed := sprint_speed * speed_multiplier * 2.0
+	
+	# Shift speed boost (3x when holding sprint)
+	if Input.is_action_pressed("sprint"):
+		fly_speed *= 3.0
 	
 	if direction.length() > 0.0:
 		var target_velocity := direction.normalized() * fly_speed
@@ -455,6 +472,10 @@ func _process(delta: float) -> void:
 
 
 func _handle_terrain_editing() -> void:
+	# Don't handle terrain editing in build mode
+	if snap_system and snap_system.is_in_build_mode():
+		return
+	
 	# Digging is now handled by ToolManager via equipped tool
 	# Only handle building here (right-click)
 	var build_pressed := Input.is_action_just_pressed("terrain_build")
@@ -640,6 +661,8 @@ func _update_marker_color_for_hardness(hit: VoxelRaycastResult) -> void:
 # Tool references
 var pickaxe_instance: Pickaxe = null
 var shovel_instance: Shovel = null
+var blueprint_instance: Blueprint = null
+var hoe_instance: Hoe = null
 
 
 func _setup_default_tool() -> void:
@@ -655,6 +678,21 @@ func _setup_default_tool() -> void:
 	camera_pivot.add_child(shovel_instance)
 	shovel_instance.position = Vector3(0.4, -0.3, -0.6)
 	shovel_instance.visible = false
+	
+	# Instantiate blueprint tool (for build mode)
+	var blueprint_scene := preload("res://_player/tools/blueprint.tscn")
+	blueprint_instance = blueprint_scene.instantiate() as Blueprint
+	camera_pivot.add_child(blueprint_instance)
+	blueprint_instance.visible = false
+	if tool_manager:
+		tool_manager.blueprint_tool = blueprint_instance
+	
+	# Instantiate hoe tool (for terrain flattening)
+	var hoe_scene := preload("res://_player/tools/hoe.tscn")
+	hoe_instance = hoe_scene.instantiate() as Hoe
+	camera_pivot.add_child(hoe_instance)
+	hoe_instance.position = Vector3(0.4, -0.3, -0.6)
+	hoe_instance.visible = false
 	
 	# Equip pickaxe by default
 	if tool_manager:
@@ -728,8 +766,21 @@ func _update_closest_pickup() -> void:
 func _handle_pickup_interaction() -> void:
 	if Input.is_action_just_pressed("pickup_item") and closest_pickup:
 		if closest_pickup.has_method("attempt_pickup"):
+			# Check if pickup is invulnerable (recently dropped by player)
+			var invuln_timer: float = closest_pickup.get("invulnerability_timer") if closest_pickup.get("invulnerability_timer") != null else 0.0
+			if invuln_timer > 0.0:
+				if tool_feedback:
+					tool_feedback.show_message("Item recently dropped (wait %.0fs)" % invuln_timer, "warning")
+				return
+			
+			# Get display name before pickup (pickup will be freed after collection)
+			var resource_type: String = closest_pickup.resource_type
+			var amount: int = closest_pickup.amount
+			var display_name: String = resource_type.capitalize().replace("_", " ")
+			if Inventory:
+				var info: Dictionary = Inventory.get_resource_info(resource_type)
+				display_name = info.get("display_name", display_name)
+			
 			var success: bool = closest_pickup.attempt_pickup(self)
 			if success and tool_feedback:
-				var resource_type: String = closest_pickup.resource_type
-				var amount: int = closest_pickup.amount
-				tool_feedback.show_message("Picked up %s x%d" % [resource_type.capitalize(), amount])
+				tool_feedback.show_message("Picked up %s x%d" % [display_name, amount])

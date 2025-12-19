@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3 uid="uid://blueprint_scene"]
+
+[ext_resource type="Script" path="res://_player/tools/blueprint.gd" id="1_script"]
+
+[node name="Blueprint" type="Node3D"]
+script = ExtResource("1_script")
+tool_tier = 0
+stamina_cost_per_use = 0.0
+cooldown_duration = 0.0
+durability_max = -1

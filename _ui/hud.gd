@@ -12,6 +12,7 @@ extends CanvasLayer
 @onready var resource_display: HBoxContainer = $ResourceDisplay
 @onready var inventory_hint: Label = $InventoryHint
 @onready var pickup_prompt: Label = $PickupPrompt
+@onready var collection_indicator: Label = $CollectionIndicator
 
 var tool_message_timer: float = 0.0
 const TOOL_MESSAGE_DURATION: float = 2.0
@@ -76,6 +77,13 @@ func _ready() -> void:
 	if inventory_hint:
 		inventory_hint.visible = true
 		inventory_hint_timer = INVENTORY_HINT_DURATION
+	
+	# Initialize collection indicator
+	_update_collection_indicator()
+	
+	# Connect to GameSettings changes
+	if GameSettings:
+		GameSettings.settings_changed.connect(_on_game_settings_changed)
 
 
 func _process(delta: float) -> void:
@@ -239,6 +247,17 @@ func _update_pickup_prompt() -> void:
 	if not pickup_prompt:
 		return
 	
+	# Check if prompts are enabled in settings
+	var show_prompts: bool = true
+	if GameSettings:
+		var setting = GameSettings.get_setting("gameplay.show_pickup_prompts")
+		if setting != null:
+			show_prompts = setting
+	
+	if not show_prompts:
+		pickup_prompt.visible = false
+		return
+	
 	if not player:
 		pickup_prompt.visible = false
 		return
@@ -250,9 +269,50 @@ func _update_pickup_prompt() -> void:
 		if invuln_timer <= 0.0:
 			var resource_type: String = closest_pickup.resource_type
 			var amount: int = closest_pickup.amount
-			pickup_prompt.text = "[E] Pick up %s x%d" % [resource_type.capitalize(), amount]
+			var display_name: String = resource_type.capitalize().replace("_", " ")
+			if Inventory:
+				var info: Dictionary = Inventory.get_resource_info(resource_type)
+				display_name = info.get("display_name", display_name)
+			pickup_prompt.text = "[E] Pick up %s x%d" % [display_name, amount]
 			pickup_prompt.visible = true
 		else:
-			pickup_prompt.visible = false
+			# Show invulnerability message
+			pickup_prompt.text = "Recently dropped (%.0fs)" % invuln_timer
+			pickup_prompt.visible = true
 	else:
 		pickup_prompt.visible = false
+
+
+func _update_collection_indicator() -> void:
+	if not collection_indicator:
+		return
+	
+	# Check if indicator should be shown
+	var show_indicator: bool = true
+	if GameSettings:
+		var setting = GameSettings.get_setting("gameplay.show_collection_indicator")
+		if setting != null:
+			show_indicator = setting
+	
+	if not show_indicator:
+		collection_indicator.visible = false
+		return
+	
+	# Check auto-collect status
+	var auto_collect: bool = true
+	if GameSettings:
+		auto_collect = GameSettings.is_auto_collect_enabled()
+	
+	if auto_collect:
+		collection_indicator.text = "🧲 Auto-Collect ON"
+		collection_indicator.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 0.8))
+	else:
+		collection_indicator.text = "🧲 Auto-Collect OFF"
+		collection_indicator.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3, 0.6))
+	
+	collection_indicator.visible = true
+
+
+func _on_game_settings_changed(setting_name: String, _value: Variant) -> void:
+	if setting_name.begins_with("gameplay."):
+		_update_collection_indicator()

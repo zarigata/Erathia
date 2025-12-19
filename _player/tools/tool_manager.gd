@@ -5,6 +5,9 @@ class_name ToolManager
 
 var current_tool: BaseTool = null
 var player: CharacterBody3D = null
+var blueprint_tool: Blueprint = null
+var pre_build_tool: BaseTool = null  # Store tool before build mode
+var _in_build_mode: bool = false
 
 # Signals for external feedback systems
 signal tool_action_performed(tool: BaseTool, position: Vector3, success: bool)
@@ -24,6 +27,10 @@ func _input(event: InputEvent) -> void:
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		return
 	if get_tree().root.gui_get_focus_owner() != null:
+		return
+	
+	# Block tool usage when in build mode
+	if _in_build_mode:
 		return
 	
 	if event.is_action_pressed("terrain_dig") or event.is_action_pressed("tool_primary_use"):
@@ -135,3 +142,46 @@ func _on_tool_use_failed(reason: String) -> void:
 
 func _on_tool_broken() -> void:
 	push_warning("[ToolManager] Tool broken: %s" % current_tool.name if current_tool else "Unknown")
+
+
+# ============================================================================
+# BUILD MODE INTEGRATION
+# ============================================================================
+
+func enter_build_mode() -> void:
+	if _in_build_mode:
+		return
+	
+	_in_build_mode = true
+	
+	# Store current tool before switching to blueprint
+	pre_build_tool = current_tool
+	
+	# Unequip current tool using the helper to properly disconnect signals and emit tool_unequipped
+	if current_tool and current_tool != blueprint_tool:
+		unequip_tool()
+	
+	# Equip blueprint tool via equip_tool to ensure proper signal emission and connection
+	if blueprint_tool:
+		equip_tool(blueprint_tool)
+
+
+func exit_build_mode() -> void:
+	if not _in_build_mode:
+		return
+	
+	_in_build_mode = false
+	
+	# Unequip blueprint tool
+	if blueprint_tool:
+		blueprint_tool.unequip()
+	
+	# Re-equip previous tool if valid
+	if pre_build_tool and is_instance_valid(pre_build_tool):
+		equip_tool(pre_build_tool)
+	
+	pre_build_tool = null
+
+
+func is_in_build_mode() -> bool:
+	return _in_build_mode

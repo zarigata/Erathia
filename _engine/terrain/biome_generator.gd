@@ -47,14 +47,15 @@ const BIOME_BLEND_DISTANCE: float = 15.0
 
 var _world_map_image: Image
 var _base_generator: OreGenerator
-var _biome_manager: BiomeManager
+var _biome_manager: Node  # BiomeManager autoload singleton (accessed at runtime)
 
 # Caches
 var _biome_cache: Dictionary = {}  # Vector3i -> int (chunk origin -> biome_id)
 var _biome_property_cache: Dictionary = {}  # int -> Dictionary (biome_id -> properties)
+var map_ready: bool = false  # True when world map is loaded successfully
 
-# Secondary noise for biome-specific terrain modulation
-var _biome_noise: FastNoiseLite
+# Per-biome noise instances (thread-safe, immutable after init)
+var _biome_noise_instances: Dictionary = {}  # biome_id -> FastNoiseLite
 
 # =============================================================================
 # INITIALIZATION
@@ -64,18 +65,27 @@ func _init() -> void:
 	# Instantiate base generator
 	_base_generator = OreGenerator.new()
 	
-	# Create BiomeManager instance
-	_biome_manager = BiomeManager.new()
+	# BiomeManager is an autoload singleton - will be accessed at runtime
+	# Cannot use .new() on Node-based classes
+	_biome_manager = null
 	
-	# Configure biome modulation noise
-	_biome_noise = FastNoiseLite.new()
-	_biome_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_biome_noise.seed = 12345
-	_biome_noise.frequency = 0.005
-	_biome_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	_biome_noise.fractal_octaves = 3
-	_biome_noise.fractal_lacunarity = 2.0
-	_biome_noise.fractal_gain = 0.5
+	# Get seed from WorldSeedManager if available
+	# Note: In @tool scripts, autoloads may not be available during _init()
+	# The seed will be updated later via update_seed() when the scene runs
+	var seed_value: int = 12345
+	if Engine.is_editor_hint():
+		seed_value = 12345  # Editor fallback
+	else:
+		var seed_mgr = Engine.get_singleton("WorldSeedManager")
+		if seed_mgr and seed_mgr.has_method("get_world_seed"):
+			seed_value = seed_mgr.get_world_seed()
+	
+	# Also set seed on ore noise (base generator is a resource, not directly seedable)
+	if _base_generator and _base_generator._ore_noise:
+		_base_generator._ore_noise.seed = seed_value
+	
+	# Create per-biome noise instances (thread-safe: read-only after init)
+	_create_biome_noise_instances(seed_value)
 	
 	# Load world map
 	_load_world_map()
@@ -88,6 +98,7 @@ func _load_world_map() -> void:
 	if error != OK:
 		push_warning("[BiomeGenerator] Failed to load world map from '%s'. Using default biome (PLAINS)." % world_map_path)
 		_world_map_image = null
+		map_ready = false
 		return
 	
 	# Validate image format and size
@@ -96,8 +107,23 @@ func _load_world_map() -> void:
 			map_size, map_size, _world_map_image.get_width(), _world_map_image.get_height()
 		])
 	
+	map_ready = true
 	if debug_mode:
 		print("[BiomeGenerator] World map loaded successfully: %s" % world_map_path)
+
+
+## Get BiomeManager autoload singleton (lazy initialization)
+func _get_biome_manager() -> Node:
+	if _biome_manager == null:
+		# Try to get from Engine singleton (works in runtime)
+		if not Engine.is_editor_hint():
+			_biome_manager = Engine.get_singleton("BiomeManager")
+		# Fallback: try scene tree if available
+		if _biome_manager == null:
+			var tree := Engine.get_main_loop() as SceneTree
+			if tree and tree.root:
+				_biome_manager = tree.root.get_node_or_null("/root/BiomeManager")
+	return _biome_manager
 
 
 # =============================================================================
@@ -105,11 +131,12 @@ func _load_world_map() -> void:
 # =============================================================================
 
 ## Converts world X/Z coordinates to map pixel coordinates
+## World is centered at origin, so coordinates range from -world_size/2 to +world_size/2
 func _world_to_map_coords(world_pos: Vector3) -> Vector2i:
-	# World coordinates range from 0 to world_size
-	# Map coordinates range from 0 to map_size-1
-	var pixel_x := int(world_pos.x / PIXEL_SCALE)
-	var pixel_z := int(world_pos.z / PIXEL_SCALE)
+	# Offset world coordinates to map space (world center = map center)
+	var half_world := world_size * 0.5
+	var pixel_x := int((world_pos.x + half_world) / PIXEL_SCALE)
+	var pixel_z := int((world_pos.z + half_world) / PIXEL_SCALE)
 	
 	# Clamp to valid map bounds
 	pixel_x = clampi(pixel_x, 0, map_size - 1)
@@ -120,8 +147,9 @@ func _world_to_map_coords(world_pos: Vector3) -> Vector2i:
 
 ## Bilinear sampling for smooth biome transitions (returns interpolated biome weights)
 func _sample_biome_smooth(world_pos: Vector3) -> Dictionary:
-	var map_x := world_pos.x / PIXEL_SCALE
-	var map_z := world_pos.z / PIXEL_SCALE
+	var half_world := world_size * 0.5
+	var map_x := (world_pos.x + half_world) / PIXEL_SCALE
+	var map_z := (world_pos.z + half_world) / PIXEL_SCALE
 	
 	# Get integer and fractional parts
 	var x0 := int(floor(map_x))
@@ -131,8 +159,8 @@ func _sample_biome_smooth(world_pos: Vector3) -> Dictionary:
 	x0 = maxi(x0, 0)
 	z0 = maxi(z0, 0)
 	
-	var fx := map_x - floor(map_x)
-	var fz := map_z - floor(map_z)
+	var fx: float = map_x - floor(map_x)
+	var fz: float = map_z - floor(map_z)
 	
 	# Sample 4 corners
 	var biomes: Dictionary = {}
@@ -198,98 +226,111 @@ func _get_biome_for_chunk(origin: Vector3i) -> int:
 # BIOME HEIGHT MODIFIERS
 # =============================================================================
 
-## Modifies base height based on biome type
-func _get_biome_height_modifier(biome_id: int, base_sdf: float, world_pos: Vector3) -> float:
-	var height_range := _biome_manager.get_height_range(biome_id)
+## Generates SDF directly from biome parameters
+## Returns SDF value: negative = solid, positive = air
+func _generate_biome_sdf(world_pos: Vector3, biome_id: int) -> float:
+	var bm := _get_biome_manager()
+	var height_range: Dictionary = {"min": 0, "max": 100}
+	if bm:
+		height_range = bm.get_height_range(biome_id)
 	var min_height: float = height_range.get("min", 0)
 	var max_height: float = height_range.get("max", 100)
 	
-	# Remap base_sdf into the biome's elevation window
-	# Convert SDF to approximate height in meters (negative SDF = underground)
-	# world_pos.y gives the actual height; base_sdf indicates distance to surface
-	var current_height: float = world_pos.y
-	var height_range_span: float = max_height - min_height
-	if height_range_span <= 0.0:
-		height_range_span = 100.0  # Fallback to avoid division by zero
+	# Get preconfigured noise instance for this biome (thread-safe read)
+	var biome_noise := _get_biome_noise(biome_id)
 	
-	# Calculate where current height falls relative to biome's elevation window
-	# and adjust SDF to enforce the biome's intended elevation range
-	var elevation_factor: float = 0.0
-	if current_height < min_height:
-		# Below biome's minimum - push terrain up (make more solid)
-		elevation_factor = (min_height - current_height) * 0.1
-	elif current_height > max_height:
-		# Above biome's maximum - push terrain down (make more air)
-		elevation_factor = (current_height - max_height) * 0.1
+	# Sample noise at world position (use XZ for base terrain height)
+	var noise_val := biome_noise.get_noise_2d(world_pos.x, world_pos.z)
 	
-	# Apply elevation clamping to base SDF
-	var elevation_adjusted_sdf: float = base_sdf + elevation_factor
+	# Remap noise (-1 to 1) to biome's elevation window
+	var normalized_noise := (noise_val + 1.0) * 0.5  # 0 to 1
+	var target_height := lerpf(min_height, max_height, normalized_noise)
 	
-	# Get biome-specific noise parameters
-	var noise_params := _get_biome_noise_params(biome_id)
-	_biome_noise.frequency = noise_params.get("frequency", 0.005)
-	
-	# Sample secondary noise for biome-specific terrain variation
-	var biome_noise_value := _biome_noise.get_noise_3d(world_pos.x, world_pos.y, world_pos.z)
-	var amplitude: float = noise_params.get("amplitude", 1.0)
-	
-	# Calculate height offset based on biome type
-	var height_offset: float = 0.0
-	
+	# Apply biome-specific terrain features with aggressive height variation
 	match biome_id:
-		MapGenerator.Biome.MOUNTAIN, MapGenerator.Biome.ICE_SPIRES:
-			# Amplify peaks - push terrain up
-			height_offset = -biome_noise_value * amplitude * 30.0
-			# Extra peak amplification for high areas
-			if base_sdf < -10.0:
-				height_offset -= 20.0
+		MapGenerator.Biome.MOUNTAIN:
+			# Sharp peaks with pow() amplification
+			if noise_val > 0.2:
+				target_height += pow(noise_val, 1.5) * 150.0
+			else:
+				target_height += noise_val * 50.0
+		
+		MapGenerator.Biome.ICE_SPIRES:
+			# Very sharp spires with extreme peaks
+			if noise_val > 0.3:
+				target_height += pow(noise_val, 2.0) * 200.0
+			else:
+				target_height += noise_val * 80.0
+			# Add secondary noise for jagged detail (using same biome noise instance)
+			var detail_noise := biome_noise.get_noise_3d(world_pos.x * 2.0, world_pos.y * 0.5, world_pos.z * 2.0)
+			target_height += detail_noise * 30.0
 		
 		MapGenerator.Biome.DEEP_OCEAN:
-			# Flatten and lower terrain
-			height_offset = 50.0 + biome_noise_value * 10.0
+			# Force negative heights with gentle variation
+			target_height = -80.0 + noise_val * 15.0
 		
 		MapGenerator.Biome.BEACH:
 			# Clamp to narrow range near sea level
-			height_offset = biome_noise_value * 5.0
+			target_height = clampf(target_height, -5.0, 15.0)
+			target_height += noise_val * 3.0
 		
 		MapGenerator.Biome.VOLCANIC:
-			# Sharp ridges and jagged terrain
-			var voronoi_like := abs(biome_noise_value) * amplitude * 25.0
-			height_offset = -voronoi_like
+			# Sharp ridges and jagged terrain with occasional peaks
+			var voronoi_like: float = abs(noise_val) as float
+			target_height += voronoi_like * 100.0
+			# Add sharp ridges (using same biome noise instance)
+			var ridge_noise: float = abs(biome_noise.get_noise_2d(world_pos.x * 3.0, world_pos.z * 3.0)) as float
+			target_height += ridge_noise * 50.0
 		
 		MapGenerator.Biome.SWAMP:
-			# Very flat with occasional bumps
-			height_offset = biome_noise_value * 8.0 + 5.0
+			# Very flat with narrow height range
+			target_height = clampf(target_height, -5.0, 10.0)
+			target_height += noise_val * 3.0
 		
 		MapGenerator.Biome.DESERT:
-			# Rolling dunes
-			height_offset = sin(world_pos.x * 0.02) * cos(world_pos.z * 0.02) * 15.0
-			height_offset += biome_noise_value * amplitude * 10.0
+			# Rolling dunes with sine-wave pattern
+			var dune_pattern: float = sin(world_pos.x * 0.01) * cos(world_pos.z * 0.01)
+			target_height += dune_pattern * 25.0
+			target_height += noise_val * 20.0
 		
 		MapGenerator.Biome.PLAINS:
 			# Gentle rolling hills
-			height_offset = biome_noise_value * amplitude * 8.0
+			target_height += noise_val * 15.0
 		
-		MapGenerator.Biome.FOREST, MapGenerator.Biome.JUNGLE:
-			# Moderate terrain variation
-			height_offset = biome_noise_value * amplitude * 15.0
+		MapGenerator.Biome.FOREST:
+			# Moderate terrain variation with gentle hills
+			target_height += noise_val * 30.0
+		
+		MapGenerator.Biome.JUNGLE:
+			# Moderate terrain with some steeper areas
+			target_height += noise_val * 35.0
 		
 		MapGenerator.Biome.TUNDRA:
-			# Frozen rolling terrain
-			height_offset = biome_noise_value * amplitude * 12.0 - 10.0
+			# Frozen rolling terrain, slightly lower
+			target_height += noise_val * 25.0 - 10.0
 		
 		MapGenerator.Biome.SAVANNA:
 			# Mostly flat with gentle rises
-			height_offset = biome_noise_value * amplitude * 6.0
+			target_height += noise_val * 12.0
 		
 		MapGenerator.Biome.MUSHROOM:
-			# Unusual terrain with pockets
-			height_offset = biome_noise_value * amplitude * 18.0
+			# Unusual terrain with pockets and bumps (using same biome noise instance)
+			var pocket_noise: float = abs(biome_noise.get_noise_2d(world_pos.x * 2.0, world_pos.z * 2.0)) as float
+			target_height += noise_val * 30.0
+			target_height -= pocket_noise * 20.0  # Create depressions
 		
 		_:
-			height_offset = biome_noise_value * amplitude * 10.0
+			target_height += noise_val * 20.0
 	
-	return elevation_adjusted_sdf + height_offset
+	# Calculate SDF: positive = air (above surface), negative = solid (below surface)
+	var sdf: float = world_pos.y - target_height
+	return sdf
+
+
+## Legacy function for compatibility - now wraps _generate_biome_sdf
+func _get_biome_height_modifier(biome_id: int, base_sdf: float, world_pos: Vector3) -> float:
+	# Use new direct SDF generation
+	return _generate_biome_sdf(world_pos, biome_id)
 
 
 # =============================================================================
@@ -302,7 +343,10 @@ func _get_biome_material(biome_id: int, sdf: float, world_pos: Vector3) -> int:
 		return MAT_AIR
 	
 	# Get ore richness for this biome
-	var ore_richness := _biome_manager.get_ore_richness(biome_id)
+	var bm := _get_biome_manager()
+	var ore_richness: float = 1.0
+	if bm:
+		ore_richness = bm.get_ore_richness(biome_id)
 	
 	# Surface layer (within DIRT_LAYER_THICKNESS of surface)
 	if sdf > -DIRT_LAYER_THICKNESS:
@@ -324,60 +368,148 @@ func _get_biome_material(biome_id: int, sdf: float, world_pos: Vector3) -> int:
 
 
 # =============================================================================
-# BIOME NOISE PARAMETERS
+# BIOME NOISE INSTANCES (THREAD-SAFE)
 # =============================================================================
 
-## Returns noise parameters for biome-specific terrain generation
-func _get_biome_noise_params(biome_id: int) -> Dictionary:
-	match biome_id:
-		MapGenerator.Biome.PLAINS:
-			return {"frequency": 0.003, "amplitude": 1.0, "octaves": 2}
-		
-		MapGenerator.Biome.MOUNTAIN:
-			return {"frequency": 0.008, "amplitude": 2.0, "octaves": 4}
-		
-		MapGenerator.Biome.ICE_SPIRES:
-			return {"frequency": 0.01, "amplitude": 2.5, "octaves": 4}
-		
-		MapGenerator.Biome.DESERT:
-			return {"frequency": 0.005, "amplitude": 1.2, "octaves": 2}
-		
-		MapGenerator.Biome.SWAMP:
-			return {"frequency": 0.002, "amplitude": 0.5, "octaves": 2}
-		
-		MapGenerator.Biome.VOLCANIC:
-			return {"frequency": 0.01, "amplitude": 1.8, "octaves": 3}
-		
-		MapGenerator.Biome.FOREST:
-			return {"frequency": 0.004, "amplitude": 1.3, "octaves": 3}
-		
-		MapGenerator.Biome.JUNGLE:
-			return {"frequency": 0.005, "amplitude": 1.4, "octaves": 3}
-		
-		MapGenerator.Biome.TUNDRA:
-			return {"frequency": 0.004, "amplitude": 1.1, "octaves": 2}
-		
-		MapGenerator.Biome.SAVANNA:
-			return {"frequency": 0.003, "amplitude": 0.8, "octaves": 2}
-		
-		MapGenerator.Biome.BEACH:
-			return {"frequency": 0.002, "amplitude": 0.3, "octaves": 1}
-		
-		MapGenerator.Biome.DEEP_OCEAN:
-			return {"frequency": 0.003, "amplitude": 0.4, "octaves": 2}
-		
-		MapGenerator.Biome.MUSHROOM:
-			return {"frequency": 0.006, "amplitude": 1.5, "octaves": 3}
-		
-		_:
-			return {"frequency": 0.005, "amplitude": 1.0, "octaves": 2}
+## Creates preconfigured noise instances for each biome (called once at init)
+## These instances are immutable after creation, making them thread-safe
+func _create_biome_noise_instances(seed_value: int) -> void:
+	_biome_noise_instances.clear()
+	
+	# Define noise parameters for each biome
+	var biome_params: Dictionary = {
+		MapGenerator.Biome.PLAINS: {"frequency": 0.003, "octaves": 2},
+		MapGenerator.Biome.MOUNTAIN: {"frequency": 0.008, "octaves": 4},
+		MapGenerator.Biome.ICE_SPIRES: {"frequency": 0.01, "octaves": 4},
+		MapGenerator.Biome.DESERT: {"frequency": 0.005, "octaves": 2},
+		MapGenerator.Biome.SWAMP: {"frequency": 0.002, "octaves": 2},
+		MapGenerator.Biome.VOLCANIC: {"frequency": 0.01, "octaves": 3},
+		MapGenerator.Biome.FOREST: {"frequency": 0.004, "octaves": 3},
+		MapGenerator.Biome.JUNGLE: {"frequency": 0.005, "octaves": 3},
+		MapGenerator.Biome.TUNDRA: {"frequency": 0.004, "octaves": 2},
+		MapGenerator.Biome.SAVANNA: {"frequency": 0.003, "octaves": 2},
+		MapGenerator.Biome.BEACH: {"frequency": 0.002, "octaves": 1},
+		MapGenerator.Biome.DEEP_OCEAN: {"frequency": 0.003, "octaves": 2},
+		MapGenerator.Biome.MUSHROOM: {"frequency": 0.006, "octaves": 3},
+	}
+	
+	# Create a noise instance for each biome with its specific parameters
+	for biome_id in biome_params:
+		var params: Dictionary = biome_params[biome_id]
+		var noise := FastNoiseLite.new()
+		noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+		noise.seed = seed_value
+		noise.frequency = params["frequency"]
+		noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+		noise.fractal_octaves = params["octaves"]
+		noise.fractal_lacunarity = 2.0
+		noise.fractal_gain = 0.5
+		_biome_noise_instances[biome_id] = noise
+	
+	# Create a default noise instance for unknown biomes
+	var default_noise := FastNoiseLite.new()
+	default_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	default_noise.seed = seed_value
+	default_noise.frequency = 0.005
+	default_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	default_noise.fractal_octaves = 2
+	default_noise.fractal_lacunarity = 2.0
+	default_noise.fractal_gain = 0.5
+	_biome_noise_instances[-1] = default_noise  # -1 as default key
+
+
+## Returns the preconfigured noise instance for a biome (thread-safe read)
+func _get_biome_noise(biome_id: int) -> FastNoiseLite:
+	if _biome_noise_instances.has(biome_id):
+		return _biome_noise_instances[biome_id]
+	return _biome_noise_instances[-1]  # Return default
 
 
 # =============================================================================
 # BIOME TRANSITION SMOOTHING
 # =============================================================================
 
-## Returns blended biome data for smooth transitions
+## Generates SDF with proper distance-based biome blending
+## Uses BIOME_BLEND_DISTANCE to create smooth transitions between biomes
+func _generate_blended_sdf(world_pos: Vector3) -> float:
+	# Sample biome weights using bilinear interpolation
+	var biome_weights := _sample_biome_smooth(world_pos)
+	
+	# If only one biome, no blending needed
+	if biome_weights.size() == 1:
+		var biome_id: int = biome_weights.keys()[0]
+		return _generate_biome_sdf(world_pos, biome_id)
+	
+	# Calculate distance-based blend weights using BIOME_BLEND_DISTANCE
+	# The bilinear weights from _sample_biome_smooth give us 0-1 based on pixel position
+	# We need to scale these by BIOME_BLEND_DISTANCE for proper world-space blending
+	var adjusted_weights := _adjust_weights_for_blend_distance(world_pos, biome_weights)
+	
+	# Generate SDF for each biome and blend proportionally
+	var blended_sdf: float = 0.0
+	var total_weight: float = 0.0
+	
+	for biome_id in adjusted_weights:
+		var weight: float = adjusted_weights[biome_id]
+		if weight > 0.001:  # Skip negligible weights
+			var biome_sdf := _generate_biome_sdf(world_pos, biome_id)
+			blended_sdf += biome_sdf * weight
+			total_weight += weight
+	
+	# Normalize
+	if total_weight > 0.0:
+		blended_sdf /= total_weight
+	
+	return blended_sdf
+
+
+## Adjusts biome weights based on distance to biome boundary
+## Uses BIOME_BLEND_DISTANCE to create smooth falloff at transitions
+func _adjust_weights_for_blend_distance(world_pos: Vector3, raw_weights: Dictionary) -> Dictionary:
+	# Get the fractional position within the current pixel
+	var map_x: float = world_pos.x / PIXEL_SCALE
+	var map_z: float = world_pos.z / PIXEL_SCALE
+	var frac_x: float = fmod(map_x, 1.0)
+	var frac_z: float = fmod(map_z, 1.0)
+	
+	# Calculate distance to nearest pixel boundary (0 = at boundary, 0.5 = center)
+	var dist_to_boundary_x := minf(frac_x, 1.0 - frac_x)
+	var dist_to_boundary_z := minf(frac_z, 1.0 - frac_z)
+	var dist_to_boundary := minf(dist_to_boundary_x, dist_to_boundary_z)
+	
+	# Convert pixel-space distance to world-space distance
+	var world_dist_to_boundary := dist_to_boundary * PIXEL_SCALE
+	
+	# Calculate blend factor based on BIOME_BLEND_DISTANCE
+	# 0 = fully at boundary (blend equally), 1 = outside blend zone (use primary biome)
+	var blend_factor := clampf(world_dist_to_boundary / BIOME_BLEND_DISTANCE, 0.0, 1.0)
+	
+	# Apply smoothstep for smoother transitions
+	blend_factor = blend_factor * blend_factor * (3.0 - 2.0 * blend_factor)
+	
+	# Find primary biome (highest raw weight)
+	var primary_biome: int = -1
+	var max_weight: float = 0.0
+	for biome_id in raw_weights:
+		if raw_weights[biome_id] > max_weight:
+			max_weight = raw_weights[biome_id]
+			primary_biome = biome_id
+	
+	# Adjust weights: interpolate between raw weights and primary-only
+	var adjusted: Dictionary = {}
+	for biome_id in raw_weights:
+		var raw_weight: float = raw_weights[biome_id]
+		if biome_id == primary_biome:
+			# Primary biome weight increases as we move away from boundary
+			adjusted[biome_id] = lerpf(raw_weight, 1.0, blend_factor)
+		else:
+			# Secondary biome weights decrease as we move away from boundary
+			adjusted[biome_id] = lerpf(raw_weight, 0.0, blend_factor)
+	
+	return adjusted
+
+
+## Returns blended biome data for smooth transitions (legacy compatibility)
 func _smooth_biome_transition(world_pos: Vector3, primary_biome: int) -> Dictionary:
 	var biome_weights := _sample_biome_smooth(world_pos)
 	
@@ -385,10 +517,13 @@ func _smooth_biome_transition(world_pos: Vector3, primary_biome: int) -> Diction
 	if biome_weights.size() == 1:
 		return {"biome_ids": [primary_biome], "weights": [1.0]}
 	
+	# Use distance-adjusted weights
+	var adjusted_weights := _adjust_weights_for_blend_distance(world_pos, biome_weights)
+	
 	# Sort by weight descending
 	var sorted_biomes: Array = []
-	for biome_id in biome_weights:
-		sorted_biomes.append([biome_id, biome_weights[biome_id]])
+	for biome_id in adjusted_weights:
+		sorted_biomes.append([biome_id, adjusted_weights[biome_id]])
 	sorted_biomes.sort_custom(func(a, b): return a[1] > b[1])
 	
 	var biome_ids: Array = []
@@ -400,7 +535,7 @@ func _smooth_biome_transition(world_pos: Vector3, primary_biome: int) -> Diction
 	return {"biome_ids": biome_ids, "weights": weights}
 
 
-## Blends height modifiers from multiple biomes
+## Blends height modifiers from multiple biomes (legacy compatibility)
 func _blend_height_modifiers(world_pos: Vector3, base_sdf: float, transition_data: Dictionary) -> float:
 	var biome_ids: Array = transition_data.get("biome_ids", [])
 	var weights: Array = transition_data.get("weights", [])
@@ -432,15 +567,12 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 	var block_size := out_buffer.get_size()
 	var lod_scale := 1 << lod
 	
-	# First pass: Generate base terrain SDF using the base generator
-	_base_generator._base_generator.generate_block(out_buffer, origin, lod)
-	
-	# Calculate chunk center for biome sampling
+	# Calculate chunk center for biome sampling (sample once per chunk)
 	var center := Vector3(origin) + Vector3(block_size) * 0.5 * lod_scale
 	var primary_biome := _get_biome_at_position(center)
 	
-	# Get transition data for smooth blending
-	var transition_data := _smooth_biome_transition(center, primary_biome)
+	# Check if this is a boundary chunk (for per-voxel biome sampling)
+	var is_boundary_chunk := _is_near_biome_boundary(center, block_size.x * lod_scale)
 	
 	# LOD-aware sampling frequency
 	var sample_step := 1
@@ -449,7 +581,7 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 	if lod >= 4:
 		sample_step = 4  # Sample every 4th voxel at very high LOD
 	
-	# Second pass: Apply biome modifications
+	# Generate terrain directly from biome parameters (no base generator)
 	for z in range(0, block_size.z, sample_step):
 		for y in range(0, block_size.y, sample_step):
 			for x in range(0, block_size.x, sample_step):
@@ -459,32 +591,26 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 				var world_z: float = origin.z + z * lod_scale
 				var world_pos := Vector3(world_x, world_y, world_z)
 				
-				# Get base SDF value
-				var base_sdf: float = out_buffer.get_voxel_f(x, y, z, VoxelBuffer.CHANNEL_SDF)
+				# Determine biome for this voxel
+				var voxel_biome := primary_biome
+				if is_boundary_chunk:
+					# Per-voxel biome sampling at boundaries for smooth transitions
+					voxel_biome = _get_biome_at_position(world_pos)
 				
-				# Apply biome height modifier with blending
-				var modified_sdf: float
-				var transition_biome_ids: Array = transition_data.get("biome_ids", [])
-				var voxel_transition: Dictionary = {}
-				
-				if transition_biome_ids.size() > 1:
-					# Per-voxel transition sampling for accuracy at biome boundaries
-					voxel_transition = _smooth_biome_transition(world_pos, primary_biome)
-					modified_sdf = _blend_height_modifiers(world_pos, base_sdf, voxel_transition)
+				# Generate SDF with proper biome blending at boundaries
+				var sdf: float
+				if is_boundary_chunk:
+					# Use distance-based blending at biome boundaries
+					sdf = _generate_blended_sdf(world_pos)
 				else:
-					modified_sdf = _get_biome_height_modifier(primary_biome, base_sdf, world_pos)
+					# Single biome - no blending needed
+					sdf = _generate_biome_sdf(world_pos, voxel_biome)
 				
-				# Determine material based on biome - use highest-weight biome from voxel_transition
-				var material_biome: int = primary_biome
-				var voxel_biome_ids: Array = voxel_transition.get("biome_ids", [])
-				if voxel_biome_ids.size() > 0:
-					# Use the highest-weight biome (first in sorted array) for material
-					material_biome = voxel_biome_ids[0]
+				# Determine material based on biome and SDF
+				var material_id := _get_biome_material(voxel_biome, sdf, world_pos)
 				
-				var material_id := _get_biome_material(material_biome, modified_sdf, world_pos)
-				
-				# Write modified values
-				out_buffer.set_voxel_f(modified_sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
+				# Write values
+				out_buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
 				out_buffer.set_voxel(material_id, x, y, z, VoxelBuffer.CHANNEL_INDICES)
 				
 				# Fill in skipped voxels at high LOD (simple copy)
@@ -498,12 +624,32 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 								var fy := y + sy
 								var fz := z + sz
 								if fx < block_size.x and fy < block_size.y and fz < block_size.z:
-									out_buffer.set_voxel_f(modified_sdf, fx, fy, fz, VoxelBuffer.CHANNEL_SDF)
+									out_buffer.set_voxel_f(sdf, fx, fy, fz, VoxelBuffer.CHANNEL_SDF)
 									out_buffer.set_voxel(material_id, fx, fy, fz, VoxelBuffer.CHANNEL_INDICES)
 	
 	# Emit signal for vegetation placement (only at LOD 0 for performance)
 	if lod == 0:
 		chunk_generated.emit(origin, primary_biome)
+
+
+## Check if chunk is near a biome boundary by sampling corners
+func _is_near_biome_boundary(chunk_center: Vector3, chunk_size: float) -> bool:
+	var half_size := chunk_size * 0.5
+	var center_biome := _get_biome_at_position(chunk_center)
+	
+	# Sample 4 corners
+	var corners := [
+		Vector3(chunk_center.x - half_size, chunk_center.y, chunk_center.z - half_size),
+		Vector3(chunk_center.x + half_size, chunk_center.y, chunk_center.z - half_size),
+		Vector3(chunk_center.x - half_size, chunk_center.y, chunk_center.z + half_size),
+		Vector3(chunk_center.x + half_size, chunk_center.y, chunk_center.z + half_size)
+	]
+	
+	for corner in corners:
+		if _get_biome_at_position(corner) != center_biome:
+			return true
+	
+	return false
 
 
 # =============================================================================
@@ -516,10 +662,16 @@ func debug_draw_biome_info(world_pos: Vector3) -> void:
 		return
 	
 	var biome_id := _get_biome_at_position(world_pos)
-	var biome_name := _biome_manager.get_biome_name(biome_id)
-	var danger := _biome_manager.get_danger_rating(biome_id)
-	var factions := _biome_manager.get_allowed_factions(biome_id)
-	var ore_richness := _biome_manager.get_ore_richness(biome_id)
+	var bm := _get_biome_manager()
+	var biome_name := "Unknown"
+	var danger := 1.0
+	var factions := []
+	var ore_richness := 1.0
+	if bm:
+		biome_name = bm.get_biome_name(biome_id)
+		danger = bm.get_danger_rating(biome_id)
+		factions = bm.get_allowed_factions(biome_id)
+		ore_richness = bm.get_ore_richness(biome_id)
 	
 	print("[BiomeGenerator] Position: %s" % world_pos)
 	print("  Biome: %s (ID: %d)" % [biome_name, biome_id])
@@ -542,3 +694,23 @@ func clear_caches() -> void:
 func reload_world_map() -> void:
 	clear_caches()
 	_load_world_map()
+
+
+## Reloads the world map and emits signal to notify other systems
+func reload_world_map_and_notify() -> void:
+	reload_world_map()
+	if map_ready:
+		print("[BiomeGenerator] World map reloaded successfully")
+		chunk_generated.emit(Vector3i.ZERO, MapGenerator.Biome.PLAINS)  # Trigger vegetation refresh
+	else:
+		push_warning("[BiomeGenerator] Failed to reload world map")
+
+
+## Update seed from WorldSeedManager
+func update_seed(new_seed: int) -> void:
+	if _base_generator and _base_generator._base_generator:
+		_base_generator._base_generator.seed = new_seed
+	# Recreate all biome noise instances with new seed
+	_create_biome_noise_instances(new_seed)
+	clear_caches()
+	print("[BiomeGenerator] Seed updated to: %d" % new_seed)

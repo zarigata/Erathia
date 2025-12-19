@@ -15,9 +15,14 @@ signal item_added(resource_type: String, amount: int)
 signal item_removed(resource_type: String, amount: int)
 signal slot_swapped(from_index: int, to_index: int)
 signal item_dropped_to_world(resource_type: String, amount: int, drop_position: Vector3)
+signal building_piece_crafted(piece_id: String, amount: int)
 
 # Slot structure: {slot_index: {resource_type: String, amount: int, max_stack: int}}
 var slots: Dictionary = {}
+
+# Cheat state variables
+var _infinite_building_active: bool = false
+var _infinite_crafting_active: bool = false
 
 # Resource database mapping resource types to properties
 var resource_database: Dictionary = {
@@ -55,6 +60,175 @@ var resource_database: Dictionary = {
 		"stack_size": 20,
 		"category": Category.MATERIAL,
 		"description": "A rare crystal with magical properties."
+	},
+	"faction_core": {
+		"display_name": "Faction Core",
+		"icon_path": "res://_assets/icons/resources/faction_core.png",
+		"stack_size": 10,
+		"category": Category.MATERIAL,
+		"description": "A powerful core imbued with faction energy."
+	},
+	# Building pieces
+	"thatch_wall": {
+		"display_name": "Thatch Wall",
+		"icon_path": "res://_assets/icons/building/thatch_wall.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A simple wall made of thatch and sticks."
+	},
+	"dirt_floor": {
+		"display_name": "Dirt Floor",
+		"icon_path": "res://_assets/icons/building/dirt_floor.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Packed dirt floor tile."
+	},
+	"thatch_roof": {
+		"display_name": "Thatch Roof",
+		"icon_path": "res://_assets/icons/building/thatch_roof.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A simple thatched roof."
+	},
+	"simple_door": {
+		"display_name": "Simple Door",
+		"icon_path": "res://_assets/icons/building/simple_door.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A basic wooden door."
+	},
+	"ladder": {
+		"display_name": "Ladder",
+		"icon_path": "res://_assets/icons/building/ladder.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A simple wooden ladder."
+	},
+	"wood_wall": {
+		"display_name": "Wood Wall",
+		"icon_path": "res://_assets/icons/building/wood_wall.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A sturdy wooden plank wall."
+	},
+	"wood_floor": {
+		"display_name": "Wood Floor",
+		"icon_path": "res://_assets/icons/building/wood_floor.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Wooden plank flooring."
+	},
+	"wood_roof": {
+		"display_name": "Wood Shingle Roof",
+		"icon_path": "res://_assets/icons/building/wood_roof.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A roof with wooden shingles."
+	},
+	"wood_door": {
+		"display_name": "Wood Door",
+		"icon_path": "res://_assets/icons/building/wood_door.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A solid wooden door."
+	},
+	"wood_foundation": {
+		"display_name": "Wood Foundation",
+		"icon_path": "res://_assets/icons/building/wood_foundation.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A wooden foundation for building."
+	},
+	"wood_stairs": {
+		"display_name": "Wood Stairs",
+		"icon_path": "res://_assets/icons/building/wood_stairs.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Wooden staircase."
+	},
+	"stone_wall": {
+		"display_name": "Stone Wall",
+		"icon_path": "res://_assets/icons/building/stone_wall.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A solid stone block wall."
+	},
+	"stone_floor": {
+		"display_name": "Stone Floor",
+		"icon_path": "res://_assets/icons/building/stone_floor.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Stone tile flooring."
+	},
+	"stone_roof": {
+		"display_name": "Stone Roof",
+		"icon_path": "res://_assets/icons/building/stone_roof.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A roof with stone tiles."
+	},
+	"reinforced_door": {
+		"display_name": "Reinforced Door",
+		"icon_path": "res://_assets/icons/building/reinforced_door.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A wooden door reinforced with metal bands."
+	},
+	"stone_foundation": {
+		"display_name": "Stone Foundation",
+		"icon_path": "res://_assets/icons/building/stone_foundation.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A solid stone foundation."
+	},
+	"stone_stairs": {
+		"display_name": "Stone Stairs",
+		"icon_path": "res://_assets/icons/building/stone_stairs.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Stone staircase."
+	},
+	"metal_wall": {
+		"display_name": "Reinforced Wall",
+		"icon_path": "res://_assets/icons/building/metal_wall.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A stone wall reinforced with metal."
+	},
+	"polished_floor": {
+		"display_name": "Polished Floor",
+		"icon_path": "res://_assets/icons/building/polished_floor.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Polished stone flooring."
+	},
+	"slate_roof": {
+		"display_name": "Slate Roof",
+		"icon_path": "res://_assets/icons/building/slate_roof.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A roof with slate tiles."
+	},
+	"ornate_door": {
+		"display_name": "Ornate Door",
+		"icon_path": "res://_assets/icons/building/ornate_door.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "An ornately decorated door."
+	},
+	"reinforced_foundation": {
+		"display_name": "Reinforced Foundation",
+		"icon_path": "res://_assets/icons/building/reinforced_foundation.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "A metal-reinforced stone foundation."
+	},
+	"spiral_stairs": {
+		"display_name": "Spiral Stairs",
+		"icon_path": "res://_assets/icons/building/spiral_stairs.png",
+		"stack_size": 50,
+		"category": Category.BUILDING,
+		"description": "Elegant spiral staircase."
 	}
 }
 
@@ -62,6 +236,18 @@ var resource_database: Dictionary = {
 func _ready() -> void:
 	# Initialize empty slots dictionary
 	slots = {}
+	
+	# Connect to DevConsole cheat signals
+	if DevConsole:
+		DevConsole.cheat_toggled.connect(_on_cheat_toggled)
+
+
+func _on_cheat_toggled(cheat_name: String, enabled: bool) -> void:
+	match cheat_name:
+		"infinite_build":
+			_infinite_building_active = enabled
+		"infinite_craft":
+			_infinite_crafting_active = enabled
 
 
 ## Add resource to inventory. Returns amount that couldn't fit (0 if all fit).
@@ -527,3 +713,42 @@ func deserialize(data: Dictionary) -> void:
 	# Emit changes for all slots
 	for i in range(MAX_SLOTS):
 		inventory_changed.emit(i)
+
+
+# ============================================================================
+# BUILDING PIECE SUPPORT
+# ============================================================================
+
+## Check if player has required resources for a building piece
+func has_building_resources(piece_data: BuildPieceData) -> bool:
+	# Bypass resource check when infinite building is active
+	if _infinite_building_active:
+		return true
+	
+	if not piece_data:
+		return false
+	return has_resources(piece_data.resource_costs)
+
+
+## Consume resources when placing a building piece
+func consume_building_resources(piece_data: BuildPieceData) -> bool:
+	# Bypass resource consumption when infinite building is active
+	if _infinite_building_active:
+		if piece_data:
+			building_piece_crafted.emit(piece_data.piece_id, 1)
+		return true
+	
+	if not piece_data:
+		return false
+	
+	if not has_building_resources(piece_data):
+		return false
+	
+	for resource_type in piece_data.resource_costs:
+		var amount: int = piece_data.resource_costs[resource_type]
+		if not remove_resource(resource_type, amount):
+			push_error("Inventory: Failed to remove resource '%s' x%d" % [resource_type, amount])
+			return false
+	
+	building_piece_crafted.emit(piece_data.piece_id, 1)
+	return true

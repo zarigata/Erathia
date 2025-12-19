@@ -86,16 +86,65 @@ static func generate_bush(biome_id: int, variant: String, seed_value: int, lod_l
 		2, 3:
 			subdivisions = 0
 	
+	var mesh: ArrayMesh = null
+	
 	# Generate based on variant
 	match variant:
 		"fern", "giant_fern":
-			return _generate_fern(height, color, rng, lod_level)
+			mesh = _generate_fern(height, color, rng, lod_level)
 		"small_mushroom", "mushroom_cluster":
-			return _generate_small_mushroom(height, color, rng, lod_level)
+			mesh = _generate_small_mushroom(height, color, rng, lod_level)
 		"grass_clump", "beach_grass":
-			return _generate_grass_clump(height, color, rng, lod_level)
+			mesh = _generate_grass_clump(height, color, rng, lod_level)
 		_:
-			return _generate_icosphere_bush(width, height, depth, color, subdivisions, rng)
+			mesh = _generate_icosphere_bush(width, height, depth, color, subdivisions, rng)
+	
+	# Validate mesh was generated successfully
+	if mesh == null or mesh.get_surface_count() == 0:
+		push_warning("[BushGenerator] Failed to generate mesh for variant %s, using fallback" % variant)
+		return _fallback_bush_mesh(color)
+	
+	return mesh
+
+
+## Generate a simple fallback bush mesh
+static func _fallback_bush_mesh(color: Color) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	# Simple sphere approximation
+	var radius := 0.5
+	var segments := 4
+	var rings := 3
+	
+	for i in range(segments):
+		for j in range(rings):
+			var theta1 := (float(i) / segments) * TAU
+			var theta2 := (float(i + 1) / segments) * TAU
+			var phi1 := (float(j) / rings) * PI
+			var phi2 := (float(j + 1) / rings) * PI
+			
+			var p1 := Vector3(sin(phi1) * cos(theta1), cos(phi1), sin(phi1) * sin(theta1)) * radius
+			var p2 := Vector3(sin(phi1) * cos(theta2), cos(phi1), sin(phi1) * sin(theta2)) * radius
+			var p3 := Vector3(sin(phi2) * cos(theta2), cos(phi2), sin(phi2) * sin(theta2)) * radius
+			var p4 := Vector3(sin(phi2) * cos(theta1), cos(phi2), sin(phi2) * sin(theta1)) * radius
+			
+			p1.y += radius
+			p2.y += radius
+			p3.y += radius
+			p4.y += radius
+			
+			st.set_color(color)
+			st.add_vertex(p1)
+			st.add_vertex(p2)
+			st.add_vertex(p3)
+			
+			st.add_vertex(p1)
+			st.add_vertex(p3)
+			st.add_vertex(p4)
+	
+	st.generate_normals()
+	return st.commit()
 
 
 ## Generate a billboard for distant bushes
