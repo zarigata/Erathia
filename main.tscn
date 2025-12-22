@@ -17,6 +17,7 @@
 [ext_resource type="PackedScene" uid="uid://dqw8m3k5npx2r" path="res://_ui/loading_screen.tscn" id="14_loading_screen"]
 [ext_resource type="Script" path="res://_engine/terrain/water_plane.gd" id="16_water_plane"]
 [ext_resource type="Script" path="res://_engine/terrain/biome_world_generator.gd" id="17_biome_world_gen"]
+[ext_resource type="Script" path="res://_engine/terrain/biome_map_generator.gd" id="18_biome_map_gen"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.4, 0.6, 0.9, 1)
@@ -57,6 +58,9 @@ script = ExtResource("5_terrain_init")
 
 [node name="MapGenerator" type="Node" parent="."]
 script = ExtResource("12_map_generator")
+
+[node name="BiomeMapGeneratorGPU" type="Node" parent="."]
+script = ExtResource("18_biome_map_gen")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_main")

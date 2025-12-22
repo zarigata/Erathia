@@ -35,6 +35,7 @@ enum VegetationType {
 
 const MAX_MESH_CACHE_SIZE: int = 200
 const MAX_SEED_VARIATIONS: int = 10
+const EMPTY_RULES: Dictionary = {"types": []}
 
 # Biome vegetation rules
 # density: base spawn density (0.0-1.0), multiplied by biome's vegetation_density
@@ -97,7 +98,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.2, "variants": ["palm", "tropical"]},
 			{"type": VegetationType.BUSH, "density": 0.3, "variants": ["tropical_bush", "fern", "giant_fern"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.02, "variants": ["mossy_stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.18, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.15, "variants": ["grass"]}
 		],
 		"slope_max": 45.0,
 		"height_range": {"min": -10, "max": 120}
@@ -107,7 +108,7 @@ const BIOME_VEGETATION_RULES: Dictionary = {
 			{"type": VegetationType.TREE, "density": 0.04, "variants": ["acacia"]},
 			{"type": VegetationType.BUSH, "density": 0.08, "variants": ["dry_bush", "grass_clump"]},
 			{"type": VegetationType.ROCK_SMALL, "density": 0.04, "variants": ["stone"]},
-			{"type": VegetationType.GRASS_TUFT, "density": 0.2, "variants": ["grass"]}
+			{"type": VegetationType.GRASS_TUFT, "density": 0.15, "variants": ["grass"]}
 		],
 		"slope_max": 30.0,
 		"height_range": {"min": 0, "max": 80}
@@ -246,7 +247,8 @@ var _populated_chunks: Dictionary = {}  # Vector3i -> Array of instance data
 var _instance_spatial_hash: Dictionary = {}  # Grid cell -> Array of positions
 
 var debug_show_zones: bool = false
-var debug_enabled: bool = false
+var debug_enabled: bool = true
+var _biome_rule_queries: Dictionary = {}
 
 # Procedural generators
 var _tree_generator: RefCounted
@@ -287,9 +289,11 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 		# Move to end of LRU
 		_mesh_cache_order.erase(cache_key)
 		_mesh_cache_order.append(cache_key)
+		_log_debug("cache-hit", {"key": cache_key, "type": type, "biome": biome_id, "variant": variant, "lod": lod_level})
 		return _mesh_cache[cache_key]
 	
 	_stats["cache_misses"] += 1
+	_log_debug("cache-miss", {"key": cache_key, "type": type, "biome": biome_id, "variant": variant, "lod": lod_level})
 	
 	# Generate mesh
 	var mesh: Mesh = null
@@ -298,24 +302,38 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 			# Use new procedural tree generator
 			if _tree_generator:
 				var tree_style: int = _tree_generator.get_tree_style_for_biome(biome_id, seed_value)
+				_log_debug("generator-call", {"type": "tree_procedural", "style": tree_style, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 				mesh = _tree_generator.generate_tree_mesh(tree_style, seed_value, lod_level)
 			else:
+				_log_debug("generator-call", {"type": "tree_legacy", "variant": variant, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 				mesh = TreeGenerator.generate_tree(biome_id, variant, seed_value, lod_level)
 		VegetationType.BUSH:
+			_log_debug("generator-call", {"type": "bush", "variant": variant, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = BushGenerator.generate_bush(biome_id, variant, seed_value, lod_level)
 		VegetationType.ROCK_SMALL:
+			_log_debug("generator-call", {"type": "rock_small", "variant": variant, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = RockGenerator.generate_rock(biome_id, "small", seed_value, lod_level)
 		VegetationType.ROCK_MEDIUM:
+			_log_debug("generator-call", {"type": "rock_medium", "variant": variant, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = RockGenerator.generate_rock(biome_id, "medium", seed_value, lod_level)
 		VegetationType.GRASS_TUFT:
+			_log_debug("generator-call", {"type": "grass", "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = GrassGenerator.generate_grass_tuft(biome_id, seed_value, lod_level)
 		VegetationType.ORE_STONE, VegetationType.ORE_IRON, VegetationType.ORE_COPPER:
 			# Generate ore boulder - large rocks with ore material
 			var ore_size := "large" if type == VegetationType.ORE_IRON else "medium"
+			_log_debug("generator-call", {"type": "ore", "ore_size": ore_size, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = RockGenerator.generate_ore_boulder(type, seed_value, lod_level)
 	
 	if mesh:
-		_cache_mesh(cache_key, mesh)
+		var validation: Dictionary = _validate_mesh(mesh)
+		var validation_ok: bool = validation.get("ok", false) as bool
+		if validation_ok:
+			_log_debug("mesh-valid", {"key": cache_key, "surface_count": validation.get("surface_count", 0), "vertex_count": validation.get("vertex_count", 0)})
+			_cache_mesh(cache_key, mesh)
+		else:
+			push_warning("[VegetationManager] Mesh validation failed for key %s: %s" % [cache_key, str(validation)])
+			mesh = null
 	
 	return mesh
 
@@ -348,7 +366,43 @@ func get_billboard_mesh(type: VegetationType, biome_id: int, variant: String, se
 
 ## Get vegetation rules for a biome
 func get_biome_rules(biome_id: int) -> Dictionary:
-	return BIOME_VEGETATION_RULES.get(biome_id, {"types": [], "slope_max": 45.0, "height_range": {"min": -100, "max": 300}})
+	_biome_rule_queries[biome_id] = _biome_rule_queries.get(biome_id, 0) + 1
+	if not BIOME_VEGETATION_RULES.has(biome_id):
+		push_warning("[VegetationManager] Unknown biome id %s requested, returning default rules" % str(biome_id))
+		return {"types": [], "slope_max": 45.0, "height_range": {"min": -100, "max": 300}}
+	return BIOME_VEGETATION_RULES[biome_id]
+
+
+## Validate that biome vegetation rules are consistent (densities, variants)
+func validate_biome_rules() -> Dictionary:
+	var issues: Array[String] = []
+	for biome_id in MapGenerator.Biome.values():
+		if not BIOME_VEGETATION_RULES.has(biome_id):
+			issues.append("Biome %s missing rules" % str(biome_id))
+			continue
+		
+		var rules: Dictionary = BIOME_VEGETATION_RULES[biome_id]
+		var types: Array = rules.get("types", [])
+		for type_data: Dictionary in types:
+			var density: float = type_data.get("density", 0.0)
+			var veg_type: int = type_data.get("type", -1)
+			var variants: Array = type_data.get("variants", [])
+			if variants.is_empty():
+				issues.append("Biome %d type %d has no variants" % [biome_id, veg_type])
+			if veg_type == VegetationType.GRASS_TUFT and density > 0.15:
+				issues.append("Biome %d grass density %.3f exceeds 0.15" % [biome_id, density])
+	
+	if issues.is_empty():
+		print("[VegetationManager] Biome vegetation rules validated: OK")
+	else:
+		for issue in issues:
+			push_warning(issue)
+	
+	return {
+		"ok": issues.is_empty(),
+		"issues": issues,
+		"query_counts": _biome_rule_queries.duplicate()
+	}
 
 
 ## Get all vegetation types for a biome
@@ -496,7 +550,121 @@ func clear_mesh_cache() -> void:
 	_mesh_cache.clear()
 	_mesh_cache_order.clear()
 	_stats["cache_size"] = 0
+	_stats["cache_hits"] = 0
+	_stats["cache_misses"] = 0
 	print("[VegetationManager] Mesh cache cleared")
+
+
+## Print detailed cache contents (LRU order)
+func debug_print_cache_contents() -> void:
+	print("[VegetationManager] Cache contents (oldest -> newest):")
+	for key in _mesh_cache_order:
+		print("  %s" % key)
+	print("  Size: %d | Hits: %d | Misses: %d" % [_mesh_cache.size(), _stats["cache_hits"], _stats["cache_misses"]])
+
+
+## Run generator validation across biomes and variants
+func debug_validate_generators() -> Dictionary:
+	var results: Dictionary = {}
+	for biome_id in MapGenerator.Biome.values():
+		results[biome_id] = {}
+		results[biome_id]["tree"] = _debug_validate_type(VegetationType.TREE, biome_id)
+		results[biome_id]["bush"] = _debug_validate_type(VegetationType.BUSH, biome_id)
+		results[biome_id]["grass"] = _debug_validate_type(VegetationType.GRASS_TUFT, biome_id)
+		results[biome_id]["rock_small"] = _debug_validate_type(VegetationType.ROCK_SMALL, biome_id)
+		results[biome_id]["rock_medium"] = _debug_validate_type(VegetationType.ROCK_MEDIUM, biome_id)
+	return results
+
+
+## Test cache behavior including eviction and seed limiting
+func debug_test_cache_behavior() -> Dictionary:
+	clear_mesh_cache()
+	var report := {
+		"initial": {"size": _mesh_cache.size(), "order": _mesh_cache_order.duplicate()},
+		"first_pass_hits": 0,
+		"second_pass_hits": 0,
+		"evicted": [],
+		"final_size": 0
+	}
+	var combos: Array = []
+	for i in range(10):
+		combos.append({"type": VegetationType.TREE, "biome": MapGenerator.Biome.PLAINS, "variant": "oak", "seed": i})
+	combos.append({"type": VegetationType.BUSH, "biome": MapGenerator.Biome.FOREST, "variant": "fern", "seed": 1})
+	# First pass - cache misses expected
+	for c in combos:
+		var mesh := get_mesh_for_type(c["type"], c["biome"], c["variant"], c["seed"], 0)
+		if mesh:
+			report["first_pass_hits"] += 0
+	# Second pass - all should be hits
+	for c in combos:
+		var mesh := get_mesh_for_type(c["type"], c["biome"], c["variant"], c["seed"], 0)
+		if mesh:
+			report["second_pass_hits"] += 1
+	# Fill cache to force eviction
+	for i in range(200):
+		var seed := i + 100
+		var key := "cache_stress_%d" % i
+		var mesh := get_mesh_for_type(VegetationType.ROCK_SMALL, MapGenerator.Biome.MOUNTAIN, "granite", seed, i % 4)
+		if mesh:
+			report["evicted"].append(key) if _mesh_cache_order.size() > MAX_MESH_CACHE_SIZE else null
+	report["final_size"] = _mesh_cache.size()
+	report["order_tail"] = _mesh_cache_order.slice(maxi(0, _mesh_cache_order.size() - 5), _mesh_cache_order.size())
+	return report
+
+
+## Validate biome variant mapping against generator-supported variants
+func debug_validate_biome_variants() -> Dictionary:
+	var issues: Array[String] = []
+	for biome_id in MapGenerator.Biome.values():
+		var rules: Dictionary = BIOME_VEGETATION_RULES.get(biome_id, EMPTY_RULES)
+		for type_data: Dictionary in rules.get("types", []):
+			var veg_type: int = type_data.get("type", -1)
+			var variants: Array = type_data.get("variants", [])
+			for variant in variants:
+				if not _variant_supported(veg_type, biome_id, variant):
+					issues.append("Biome %d variant %s unsupported for type %d" % [biome_id, variant, veg_type])
+	return {
+		"ok": issues.is_empty(),
+		"issues": issues
+	}
+
+
+## Check LOD reduction vertex counts for each generator
+func debug_check_lod_reduction() -> Dictionary:
+	var summary: Dictionary = {}
+	var sample_biome := MapGenerator.Biome.FOREST
+	summary["tree"] = _debug_lod_counts(VegetationType.TREE, sample_biome, "oak")
+	summary["bush"] = _debug_lod_counts(VegetationType.BUSH, sample_biome, "green_bush")
+	summary["grass"] = _debug_lod_counts(VegetationType.GRASS_TUFT, sample_biome, "grass")
+	summary["rock_small"] = _debug_lod_counts(VegetationType.ROCK_SMALL, MapGenerator.Biome.MOUNTAIN, "granite")
+	return summary
+
+
+## Validate seed variation diversity for first 10 seeds (mod limiting)
+func debug_test_seed_variations() -> Dictionary:
+	var biome := MapGenerator.Biome.FOREST
+	var variant := "oak"
+	var base_vertices: Array = []
+	var distinct_count := 0
+	for seed in range(10):
+		var mesh := get_mesh_for_type(VegetationType.TREE, biome, variant, seed, 0)
+		if not mesh:
+			continue
+		var arrays := mesh.surface_get_arrays(0)
+		var verts: Array = arrays[Mesh.ARRAY_VERTEX]
+		if base_vertices.is_empty():
+			base_vertices = verts.duplicate()
+			distinct_count += 1
+		elif not _vertices_equal(base_vertices, verts):
+			distinct_count += 1
+	return {
+		"distinct_meshes": distinct_count,
+		"expected": 10,
+		"seed_limit_repeat": _vertices_equal(
+			_get_vertices_for_seed(VegetationType.TREE, biome, variant, 0),
+			_get_vertices_for_seed(VegetationType.TREE, biome, variant, 10)
+		)
+	}
 
 
 # =============================================================================
@@ -505,9 +673,15 @@ func clear_mesh_cache() -> void:
 
 func _cache_mesh(key: String, mesh: Mesh) -> void:
 	# Evict oldest if cache is full
-	while _mesh_cache.size() >= MAX_MESH_CACHE_SIZE and _mesh_cache_order.size() > 0:
-		var oldest: String = _mesh_cache_order.pop_front()
-		_mesh_cache.erase(oldest)
+	while _mesh_cache.size() >= MAX_MESH_CACHE_SIZE:
+		var oldest: String = ""
+		if _mesh_cache_order.size() > 0:
+			oldest = _mesh_cache_order.pop_front()
+		elif _mesh_cache.size() > 0:
+			oldest = _mesh_cache.keys()[0]
+		if oldest != "":
+			_log_debug("cache-evict", {"oldest": oldest, "note": "order-empty" if _mesh_cache_order.is_empty() else "lru"})
+			_mesh_cache.erase(oldest)
 	
 	_mesh_cache[key] = mesh
 	_mesh_cache_order.append(key)
@@ -551,3 +725,91 @@ func _reset_stats() -> void:
 	_stats["bush_count"] = 0
 	_stats["rock_count"] = 0
 	_stats["grass_count"] = 0
+
+
+func _validate_mesh(mesh: Mesh) -> Dictionary:
+	if mesh == null:
+		return {"ok": false, "reason": "null mesh"}
+	if mesh.get_surface_count() == 0:
+		return {"ok": false, "reason": "no surfaces"}
+	var arrays := mesh.surface_get_arrays(0)
+	if arrays.is_empty():
+		return {"ok": false, "reason": "empty arrays"}
+	var vertices: Array = arrays[Mesh.ARRAY_VERTEX]
+	if vertices.is_empty():
+		return {"ok": false, "reason": "no vertices"}
+	# Ensure assignable to MultiMesh
+	var mm := MultiMesh.new()
+	mm.mesh = mesh
+	return {"ok": true, "surface_count": mesh.get_surface_count(), "vertex_count": vertices.size()}
+
+
+func _debug_validate_type(veg_type: int, biome_id: int) -> Dictionary:
+	var variants := _get_variants_for_type(veg_type, biome_id)
+	if variants.is_empty():
+		variants.append("default")
+	var results: Dictionary = {}
+	for variant in variants:
+		var mesh := get_mesh_for_type(veg_type, biome_id, variant, randi(), 0)
+		var validation := _validate_mesh(mesh)
+		results[variant] = validation
+	return results
+
+
+func _get_variants_for_type(veg_type: int, biome_id: int) -> Array:
+	match veg_type:
+		VegetationType.TREE:
+			return TreeGenerator.BIOME_TREE_VARIANTS.get(biome_id, [])
+		VegetationType.BUSH:
+			return BushGenerator.BIOME_BUSH_VARIANTS.get(biome_id, [])
+		VegetationType.GRASS_TUFT:
+			return ["grass"]
+		VegetationType.ROCK_SMALL, VegetationType.ROCK_MEDIUM:
+			return ["stone"]
+		_:
+			return []
+
+
+func _variant_supported(veg_type: int, biome_id: int, variant: String) -> bool:
+	var supported := _get_variants_for_type(veg_type, biome_id)
+	if supported.is_empty():
+		return true  # treat as open variant list
+	return variant in supported
+
+
+func _debug_lod_counts(veg_type: int, biome_id: int, variant: String) -> Dictionary:
+	var counts: Array[int] = []
+	for lod in range(4):
+		var mesh := get_mesh_for_type(veg_type, biome_id, variant, 1234, lod)
+		if mesh:
+			var arrays := mesh.surface_get_arrays(0)
+			var verts: Array = arrays[Mesh.ARRAY_VERTEX]
+			counts.append(verts.size())
+		else:
+			counts.append(0)
+	return {
+		"lod_counts": counts,
+		"monotonic": counts.size() == 4 and counts[0] >= counts[1] and counts[1] >= counts[2] and counts[2] >= counts[3]
+	}
+
+
+func _get_vertices_for_seed(veg_type: int, biome_id: int, variant: String, seed_value: int) -> Array:
+	var mesh := get_mesh_for_type(veg_type, biome_id, variant, seed_value, 0)
+	if not mesh:
+		return []
+	return mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+
+
+func _vertices_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for i in range(a.size()):
+		if a[i] != b[i]:
+			return false
+	return true
+
+
+func _log_debug(label: String, payload: Dictionary) -> void:
+	if not debug_enabled:
+		return
+	print("[VegetationManager][%s] %s" % [label, str(payload)])

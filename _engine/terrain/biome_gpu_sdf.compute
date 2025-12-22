@@ -1,0 +1,216 @@
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+// Uniforms
+layout(set = 0, binding = 0) uniform sampler2D biome_map; // R=biome_id (0-1), G=dist_edge (0-1)
+layout(r32f, set = 0, binding = 1) uniform writeonly image3D sdf_output;
+
+layout(push_constant, std430) uniform Params {
+	vec3 chunk_origin;     // World position of chunk corner
+	float world_size;      // 16000.0
+	float sea_level;       // 0.0
+	float blend_dist;      // 0.2 (normalized dist_edge threshold)
+	int chunk_size;        // 32 (voxels per side)
+	uint seed;
+} p;
+
+// Biome IDs (match MapGenerator.Biome enum / GPU map encoding)
+const int BIOME_COUNT = 15;
+const int BIOME_PLAINS = 0;
+const int BIOME_FOREST = 1;
+const int BIOME_DESERT = 2;
+const int BIOME_SWAMP = 3;
+const int BIOME_JUNGLE = 4;
+const int BIOME_TUNDRA = 5;
+const int BIOME_MARSH = 6;
+const int BIOME_MOUNTAIN = 7;
+const int BIOME_SAVANNA = 8;
+const int BIOME_MUSHROOM = 9;
+const int BIOME_ICE_SPIRES = 10;
+const int BIOME_VOLCANIC = 11;
+const int BIOME_HELLSCAPE = 12;
+const int BIOME_BEACH = 13;
+const int BIOME_OCEAN = 14;
+
+// Simple hash and noise helpers
+float hash(vec3 p) {
+	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
+	return fract(sin(p) * 43758.5453123).x;
+}
+
+float noise3d(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+
+	float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+	float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+
+	float nxy0 = mix(nx00, nx10, f.y);
+	float nxy1 = mix(nx01, nx11, f.y);
+
+	return mix(nxy0, nxy1, f.z) * 2.0 - 1.0;
+}
+
+float fbm(vec3 p, float freq, int octaves) {
+	float value = 0.0;
+	float amplitude = 0.5;
+	for (int i = 0; i < octaves; i++) {
+		value += amplitude * noise3d(p * freq);
+		amplitude *= 0.5;
+		freq *= 2.0;
+	}
+	return value;
+}
+
+// Biome-specific SDF functions
+float plains_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.003, 4) * 20.0);
+}
+
+float forest_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.004, 3) * 25.0);
+}
+
+float desert_sdf(vec3 p) {
+	float dunes = sin(p.x * 0.01) * cos(p.z * 0.01) * 15.0;
+	return p.y - (fbm(p, 0.005, 2) * 10.0 + dunes);
+}
+
+float swamp_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.002, 3) * 8.0 - 5.0);
+}
+
+float jungle_sdf(vec3 p) {
+	float base = fbm(p, 0.006, 4) * 35.0;
+	return p.y - base;
+}
+
+float tundra_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.003, 3) * 15.0 + 5.0);
+}
+
+float marsh_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.0025, 3) * 6.0 - 8.0);
+}
+
+float mountain_sdf(vec3 p) {
+	float n = fbm(p, 0.008, 4);
+	return p.y - (abs(n) * 100.0 + n * 50.0);
+}
+
+float savanna_sdf(vec3 p) {
+	return p.y - (fbm(p, 0.0035, 3) * 18.0);
+}
+
+float mushroom_sdf(vec3 p) {
+	float m = fbm(p, 0.01, 3);
+	return p.y - (m * 30.0 + sin(p.x * 0.02) * 10.0);
+}
+
+float ice_spires_sdf(vec3 p) {
+	float spires = pow(abs(fbm(p, 0.015, 3)), 2.0) * 120.0;
+	return p.y - spires;
+}
+
+float volcanic_sdf(vec3 p) {
+	float cone = length(p.xz) * 0.5;
+	return p.y - (abs(fbm(p, 0.01, 3)) * 80.0 + cone);
+}
+
+float hellscape_sdf(vec3 p) {
+	float warped = fbm(p + vec3(0.0, p.y * 0.05, 0.0), 0.02, 3) * 60.0;
+	return p.y - warped;
+}
+
+float beach_sdf(vec3 p) {
+	float ripples = fbm(p * 0.02, 0.8, 2) * 1.5;
+	float terrace = smoothstep(-3.0, 3.0, p.y - p.sea_level) * 3.0;
+	return (abs(p.y - p.sea_level) - 1.5) + ripples + terrace;
+}
+
+float ocean_sdf(vec3 p) {
+	float swell = fbm(p * 0.008, 1.2, 3) * 4.0;
+	return (p.y - (p.sea_level - 18.0)) + swell;
+}
+
+float get_biome_sdf(int biome_id, vec3 world_pos) {
+	switch (biome_id) {
+		case BIOME_PLAINS:
+			return plains_sdf(world_pos);
+		case BIOME_FOREST:
+			return forest_sdf(world_pos);
+		case BIOME_DESERT:
+			return desert_sdf(world_pos);
+		case BIOME_SWAMP:
+			return swamp_sdf(world_pos);
+		case BIOME_JUNGLE:
+			return jungle_sdf(world_pos);
+		case BIOME_TUNDRA:
+			return tundra_sdf(world_pos);
+		case BIOME_MARSH:
+			return marsh_sdf(world_pos);
+		case BIOME_MOUNTAIN:
+			return mountain_sdf(world_pos);
+		case BIOME_SAVANNA:
+			return savanna_sdf(world_pos);
+		case BIOME_MUSHROOM:
+			return mushroom_sdf(world_pos);
+		case BIOME_ICE_SPIRES:
+			return ice_spires_sdf(world_pos);
+		case BIOME_VOLCANIC:
+			return volcanic_sdf(world_pos);
+		case BIOME_HELLSCAPE:
+			return hellscape_sdf(world_pos);
+		case BIOME_BEACH:
+			return beach_sdf(world_pos);
+		case BIOME_OCEAN:
+			return ocean_sdf(world_pos);
+		default:
+			return plains_sdf(world_pos);
+	}
+}
+
+void main() {
+	ivec3 voxel_coord = ivec3(gl_GlobalInvocationID.xyz);
+	if (any(greaterThanEqual(voxel_coord, ivec3(p.chunk_size)))) {
+		return;
+	}
+
+	vec3 world_pos = p.chunk_origin + vec3(voxel_coord);
+	vec2 uv = (world_pos.xz / p.world_size) + 0.5;
+
+	vec4 biome_data = texture(biome_map, uv);
+	int biome_id = clamp(int(floor(biome_data.r * float(BIOME_COUNT))), 0, BIOME_COUNT - 1);
+	float dist_edge = biome_data.g;
+
+	float sdf = get_biome_sdf(biome_id, world_pos);
+
+	if (dist_edge < p.blend_dist) {
+		vec2 texel = 1.0 / vec2(textureSize(biome_map, 0));
+		vec2 offset = texel;
+		float neighbor_sdfs[4];
+		neighbor_sdfs[0] = get_biome_sdf(clamp(int(floor(texture(biome_map, uv + vec2(offset.x, 0.0)).r * float(BIOME_COUNT))), 0, BIOME_COUNT - 1), world_pos);
+		neighbor_sdfs[1] = get_biome_sdf(clamp(int(floor(texture(biome_map, uv - vec2(offset.x, 0.0)).r * float(BIOME_COUNT))), 0, BIOME_COUNT - 1), world_pos);
+		neighbor_sdfs[2] = get_biome_sdf(clamp(int(floor(texture(biome_map, uv + vec2(0.0, offset.y)).r * float(BIOME_COUNT))), 0, BIOME_COUNT - 1), world_pos);
+		neighbor_sdfs[3] = get_biome_sdf(clamp(int(floor(texture(biome_map, uv - vec2(0.0, offset.y)).r * float(BIOME_COUNT))), 0, BIOME_COUNT - 1), world_pos);
+
+		float neighbor_avg = (neighbor_sdfs[0] + neighbor_sdfs[1] + neighbor_sdfs[2] + neighbor_sdfs[3]) * 0.25;
+		float blend_factor = dist_edge / p.blend_dist;
+		sdf = mix(neighbor_avg, sdf, blend_factor);
+	}
+
+	imageStore(sdf_output, voxel_coord, vec4(sdf, 0.0, 0.0, 0.0));
+}

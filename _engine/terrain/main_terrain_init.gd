@@ -18,6 +18,7 @@ extends Node3D
 var _terrain: VoxelLodTerrain
 var _map_generator: MapGenerator
 var _biome_generator: BiomeAwareGenerator
+var _gpu_generator: VoxelGeneratorScript
 var _player: Node3D
 var _loading_screen: CanvasLayer
 var _world_init_manager: Node
@@ -67,6 +68,7 @@ func _setup_terrain_and_connections() -> void:
 		seed_manager.seed_changed.connect(_on_world_seed_changed)
 	
 	if _terrain:
+		_initialize_generator(seed_manager)
 		# Initialize TerrainEditSystem with the terrain reference
 		if TerrainEditSystem:
 			TerrainEditSystem.set_terrain(_terrain)
@@ -82,6 +84,55 @@ func _setup_terrain_and_connections() -> void:
 	else:
 		# Legacy mode: enable player immediately
 		_enable_player()
+	
+	# Explicitly connect terrain generator to vegetation instancer as fallback
+	_connect_generator_to_vegetation()
+
+
+func _initialize_generator(seed_manager: Node) -> void:
+	var seed_value := 0
+	if seed_manager and seed_manager.has_method("get_world_seed"):
+		seed_value = seed_manager.get_world_seed()
+	
+	var gpu_wrapper := preload("res://_engine/terrain/gpu_terrain_generator_wrapper.gd").new()
+	if gpu_wrapper and gpu_wrapper.is_gpu_available():
+		_gpu_generator = gpu_wrapper
+		if _gpu_generator.has_method("update_seed"):
+			_gpu_generator.update_seed(seed_value)
+		_terrain.generator = _gpu_generator
+		print("[MainTerrainInit] Using GPU shader terrain generator")
+	else:
+		push_warning("[MainTerrainInit] GPU compute not available, falling back to BiomeAwareGenerator")
+		_biome_generator = _terrain.generator as BiomeAwareGenerator
+		if not _biome_generator:
+			_biome_generator = preload("res://_engine/terrain/biome_aware_generator.gd").new()
+		if _biome_generator and _biome_generator.has_method("update_seed"):
+			_biome_generator.update_seed(seed_value)
+		_terrain.generator = _biome_generator
+
+	# Connect GPU biome map updates if applicable
+	if _gpu_generator:
+		var biome_map_gen := get_node_or_null("BiomeMapGeneratorGPU")
+		if biome_map_gen and biome_map_gen.has_signal("map_generated"):
+			var update_callable := Callable(_gpu_generator, "update_biome_texture")
+			if not biome_map_gen.is_connected("map_generated", update_callable):
+				biome_map_gen.map_generated.connect(update_callable)
+				print("[MainTerrainInit] Connected BiomeMapGeneratorGPU to GPU terrain wrapper")
+			# Ensure the GPU biome map is produced before terrain generation
+			if biome_map_gen.has_method("generate_map"):
+				biome_map_gen.call_deferred("generate_map", seed_value)
+		else:
+			push_warning("[MainTerrainInit] BiomeMapGeneratorGPU not found; GPU generator may lack biome updates")
+
+
+func _connect_generator_to_vegetation() -> void:
+	if not _terrain or not _terrain.generator:
+		return
+	var veg_instancer := _terrain.get_node_or_null("VegetationInstancer")
+	if veg_instancer and _terrain.generator.has_signal("chunk_generated"):
+		if not _terrain.generator.is_connected("chunk_generated", Callable(veg_instancer, "_on_chunk_generated")):
+			_terrain.generator.chunk_generated.connect(Callable(veg_instancer, "_on_chunk_generated"))
+			print("[MainTerrainInit] Connected generator.chunk_generated to VegetationInstancer")
 
 
 func _start_world_initialization() -> void:
@@ -183,19 +234,23 @@ func _on_map_generated(seed_value: int) -> void:
 func _on_seed_randomized(new_seed: int) -> void:
 	print("[MainTerrainInit] Seed randomized to: %d" % new_seed)
 	
-	# Update biome generator seed
-	if _biome_generator:
+	# Update generator seed
+	if _gpu_generator and _gpu_generator.has_method("update_seed"):
+		_gpu_generator.update_seed(new_seed)
+	elif _biome_generator:
 		_biome_generator.update_seed(new_seed)
 	
 	# Force terrain to regenerate by reassigning the generator
-	if _terrain and _biome_generator:
-		_terrain.generator = _biome_generator
+	if _terrain:
+		_terrain.generator = _gpu_generator if _gpu_generator else _biome_generator
 		print("[MainTerrainInit] Terrain generator reassigned to trigger regeneration")
 
 
 func _on_world_seed_changed(new_seed: int) -> void:
 	print("[MainTerrainInit] WorldSeedManager seed changed to: %d" % new_seed)
 	# MapGenerator will handle regeneration via its own connection
+	if _gpu_generator and _gpu_generator.has_method("update_seed"):
+		_gpu_generator.update_seed(new_seed)
 
 
 ## Force terrain to completely regenerate by clearing its internal state

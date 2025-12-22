@@ -68,7 +68,7 @@ var _world_map_loaded: bool = false
 var _chunk_biome_cache: Dictionary = {}
 
 # Biome blending settings - LARGE for smooth slopes (not cliffs)
-const BIOME_BLEND_DISTANCE: float = 200.0  # Meters for smooth transitions (was 15m - way too small)
+const BIOME_BLEND_DISTANCE: float = 500.0  # Meters for smooth transitions
 const MAX_SLOPE_GRADIENT: float = 0.35  # tan(~19 degrees) for gentle walkable slopes
 
 # Mutex for thread-safe access to shared mutable state
@@ -117,9 +117,19 @@ func _load_world_map() -> void:
 		map_path = "res://_assets/world_map.png"
 	
 	if FileAccess.file_exists(map_path):
-		var loaded_image := Image.load_from_file(map_path)
-		if loaded_image:
-			_world_map_image = loaded_image
+		var img: Image = null
+		if map_path.begins_with("user://"):
+			var runtime_img := Image.new()
+			if runtime_img.load(map_path) == OK:
+				img = runtime_img
+		else:
+			var tex := ResourceLoader.load(map_path) as Texture2D
+			if tex:
+				img = tex.get_image()
+		if img:
+			if img.is_compressed():
+				img.decompress()
+			_world_map_image = img
 			_world_map_loaded = true
 			# Compute map dimensions from MapGenerator constants
 			_map_size = MapGenerator.MAP_SIZE
@@ -134,26 +144,20 @@ func _load_world_map() -> void:
 
 
 func _init_biome_height_offsets() -> void:
-	# HEIGHT OFFSETS DISABLED - Let base terrain handle all elevation
-	# Biomes only affect MATERIALS, not height
-	# This prevents the 90-degree cliff problem at biome boundaries
-	# The base VoxelGeneratorNoise already creates natural terrain variation
-	
 	_biome_height_offsets = {
-		# ALL BIOMES AT ZERO - no height modification
 		MapGenerator.Biome.BEACH: 0.0,
-		MapGenerator.Biome.DEEP_OCEAN: 0.0,
-		MapGenerator.Biome.SWAMP: 0.0,
+		MapGenerator.Biome.DEEP_OCEAN: 2.0,      # Was 0.0
+		MapGenerator.Biome.SWAMP: 0.5,           # Was 0.0
 		MapGenerator.Biome.PLAINS: 0.0,
-		MapGenerator.Biome.SAVANNA: 0.0,
-		MapGenerator.Biome.DESERT: 0.0,
-		MapGenerator.Biome.JUNGLE: 0.0,
-		MapGenerator.Biome.FOREST: 0.0,
-		MapGenerator.Biome.MUSHROOM: 0.0,
-		MapGenerator.Biome.TUNDRA: 0.0,
-		MapGenerator.Biome.VOLCANIC: 0.0,
-		MapGenerator.Biome.MOUNTAIN: 0.0,
-		MapGenerator.Biome.ICE_SPIRES: 0.0
+		MapGenerator.Biome.SAVANNA: 0.5,         # Was 0.0
+		MapGenerator.Biome.DESERT: 1.0,          # Was 0.0
+		MapGenerator.Biome.JUNGLE: -0.5,         # Was 0.0
+		MapGenerator.Biome.FOREST: -1.0,         # Was 0.0
+		MapGenerator.Biome.MUSHROOM: -1.5,       # Was 0.0
+		MapGenerator.Biome.TUNDRA: -1.5,         # Was 0.0
+		MapGenerator.Biome.VOLCANIC: -2.0,       # Was 0.0
+		MapGenerator.Biome.MOUNTAIN: -2.0,       # Was 0.0
+		MapGenerator.Biome.ICE_SPIRES: -2.0      # Was 0.0
 	}
 
 
@@ -231,13 +235,13 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 				# Apply height modulation (additive)
 				# Positive offset = terrain goes down (more air)
 				# Negative offset = terrain goes up (more solid)
-				sdf += height_offset * height_modulation_strength
+				sdf += height_offset * 0.3
 				
 				# Write modified SDF back
 				out_buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
 				
 				# Determine material based on biome, SDF, and position
-				var material_id := _get_material_for_biome(biome_id_for_material, sdf, world_pos, ore_richness)
+				var material_id := _get_material_for_biome(biome_id_for_material, sdf, world_pos, ore_richness, out_buffer, x, y, z, lod_scale)
 				
 				# Write material ID to INDICES channel
 				out_buffer.set_voxel(material_id, x, y, z, VoxelBuffer.CHANNEL_INDICES)
@@ -312,44 +316,44 @@ func _sample_biome_blended(world_pos: Vector3) -> Dictionary:
 	var center_biome := _sample_biome_at_world_pos(world_pos)
 	var center_offset := _get_biome_height_offset(center_biome)
 	
-	# Sample in 8 directions at multiple distances to find nearby different biomes
-	var blend_radius := BIOME_BLEND_DISTANCE
-	var nearest_different_dist := blend_radius + 1.0
-	var nearest_different_biome := center_biome
-	var nearest_different_offset := center_offset
+	# Enhanced 16-point radial sampling with distance weighting
+	var total_weight: float = 1.0
+	var weighted_offset_sum: float = center_offset
+	var biomes_found: Dictionary = {center_biome: true}
 	
-	# Sample 8 directions at 3 distances each (24 samples total - reasonable for performance)
-	var distances: Array[float] = [blend_radius * 0.33, blend_radius * 0.66, blend_radius]
-	for angle_idx: int in range(8):
-		var angle: float = float(angle_idx) * TAU / 8.0
+	var sample_distances: Array[float] = [
+		BIOME_BLEND_DISTANCE * 0.33,
+		BIOME_BLEND_DISTANCE * 0.66,
+		BIOME_BLEND_DISTANCE
+	]
+	
+	for angle_idx: int in range(16):
+		var angle: float = float(angle_idx) * TAU / 16.0
 		var dir: Vector3 = Vector3(cos(angle), 0.0, sin(angle))
 		
-		for dist: float in distances:
+		for dist: float in sample_distances:
 			var sample_pos: Vector3 = world_pos + dir * dist
 			var sample_biome: int = _sample_biome_at_world_pos(sample_pos)
 			
 			if sample_biome != center_biome:
-				if dist < nearest_different_dist:
-					nearest_different_dist = dist
-					nearest_different_biome = sample_biome
-					nearest_different_offset = _get_biome_height_offset(sample_biome)
-				break  # Found boundary in this direction, stop sampling further
+				biomes_found[sample_biome] = true
+				var offset := _get_biome_height_offset(sample_biome)
+				
+				var weight: float = 1.0 - (dist / BIOME_BLEND_DISTANCE)
+				weight = weight * weight  # Quadratic falloff
+				
+				weighted_offset_sum += offset * weight
+				total_weight += weight
+				break  # Boundary found in this direction
 	
-	# If no different biome within blend radius, use center offset
-	if nearest_different_dist > blend_radius:
+	if biomes_found.size() == 1:
 		return {"blended_height_offset": center_offset, "dominant_biome": center_biome}
 	
-	# Calculate blend factor based on distance to boundary
-	# At boundary (dist=0): 50/50 blend
-	# At full blend radius: 100% center biome
-	var blend_factor := nearest_different_dist / blend_radius  # 0 at boundary, 1 at edge of blend zone
-	blend_factor = blend_factor * blend_factor * (3.0 - 2.0 * blend_factor)  # Smoothstep for natural transition
+	var blended_offset: float = weighted_offset_sum / total_weight
+	var blend_factor: float = clampf(float(biomes_found.size() - 1) / 3.0, 0.0, 1.0)
+	blend_factor = blend_factor * blend_factor * (3.0 - 2.0 * blend_factor)
 	
-	# Interpolate height offset
-	var boundary_offset := (center_offset + nearest_different_offset) * 0.5
-	var blended_offset := lerpf(boundary_offset, center_offset, blend_factor)
-	
-	return {"blended_height_offset": blended_offset, "dominant_biome": center_biome}
+	return {"blended_height_offset": lerpf(center_offset, blended_offset, blend_factor), "dominant_biome": center_biome}
 
 
 # =============================================================================
@@ -443,14 +447,15 @@ func _get_ore_richness(biome_id: int) -> float:
 # MATERIAL ASSIGNMENT
 # =============================================================================
 
-func _get_material_for_biome(biome_id: int, sdf: float, world_pos: Vector3, ore_richness: float) -> int:
+func _get_material_for_biome(biome_id: int, sdf: float, world_pos: Vector3, ore_richness: float, out_buffer: VoxelBuffer, x: int, y: int, z: int, lod_scale: int) -> int:
 	# Air (positive SDF = empty space)
 	if sdf > 0.0:
 		return MAT_AIR
 	
 	# Surface layer - biome-specific material
 	if sdf > -SURFACE_LAYER_THICKNESS:
-		return _get_surface_material(biome_id)
+		var slope := _calculate_local_slope(out_buffer, x, y, z, lod_scale)
+		return _get_surface_material(biome_id, slope)
 	
 	# Subsurface layer - transition material
 	if sdf > -(SURFACE_LAYER_THICKNESS + DIRT_LAYER_THICKNESS):
@@ -474,26 +479,76 @@ func _get_material_for_biome(biome_id: int, sdf: float, world_pos: Vector3, ore_
 	return MAT_STONE
 
 
-func _get_surface_material(biome_id: int) -> int:
+func _get_surface_material(biome_id: int, slope: float) -> int:
+	# High slopes become rock for all biomes (tan(30°) ≈ 0.577)
+	if slope > 0.577:
+		return MAT_STONE
+	
 	match biome_id:
 		MapGenerator.Biome.DESERT, MapGenerator.Biome.BEACH:
 			return MAT_SAND
 		MapGenerator.Biome.TUNDRA, MapGenerator.Biome.ICE_SPIRES:
+			# Blend snow→rock on slopes 20-30 degrees (tan(20°) ≈ 0.364)
+			if slope > 0.364:
+				var blend: float = (slope - 0.364) / (0.577 - 0.364)
+				return MAT_STONE if blend > 0.5 else MAT_SNOW
 			return MAT_SNOW
-		MapGenerator.Biome.VOLCANIC:
-			return MAT_STONE  # Volcanic rock/obsidian
+		MapGenerator.Biome.VOLCANIC, MapGenerator.Biome.MOUNTAIN:
+			return MAT_STONE  # Rocky mountain surface
 		MapGenerator.Biome.DEEP_OCEAN:
 			return MAT_SAND  # Sandy ocean floor
-		MapGenerator.Biome.MOUNTAIN:
-			return MAT_STONE  # Rocky mountain surface
 		MapGenerator.Biome.PLAINS, MapGenerator.Biome.FOREST, MapGenerator.Biome.JUNGLE, MapGenerator.Biome.SAVANNA:
-			return MAT_GRASS  # Grassy biomes
-		MapGenerator.Biome.SWAMP:
-			return MAT_DIRT  # Muddy swamp
-		MapGenerator.Biome.MUSHROOM:
-			return MAT_DIRT  # Fungal soil
+			# Blend grass→rock on slopes 25-30 degrees (tan(25°) ≈ 0.466)
+			if slope > 0.466:
+				var blend: float = (slope - 0.466) / (0.577 - 0.466)
+				return MAT_STONE if blend > 0.5 else MAT_GRASS
+			return MAT_GRASS
+		MapGenerator.Biome.SWAMP, MapGenerator.Biome.MUSHROOM:
+			return MAT_DIRT  # Muddy swamp/fungal soil
 		_:
 			return MAT_GRASS  # Default: grass for unknown biomes
+
+
+func _calculate_local_slope(out_buffer: VoxelBuffer, x: int, y: int, z: int, lod_scale: int) -> float:
+	var size := out_buffer.get_size()
+	var center := out_buffer.get_voxel_f(x, y, z, VoxelBuffer.CHANNEL_SDF)
+	var step: float = float(lod_scale)
+	
+	var east := center
+	var west := center
+	if x + 1 < size.x:
+		east = out_buffer.get_voxel_f(x + 1, y, z, VoxelBuffer.CHANNEL_SDF)
+	if x - 1 >= 0:
+		west = out_buffer.get_voxel_f(x - 1, y, z, VoxelBuffer.CHANNEL_SDF)
+	
+	var north := center
+	var south := center
+	if z + 1 < size.z:
+		north = out_buffer.get_voxel_f(x, y, z + 1, VoxelBuffer.CHANNEL_SDF)
+	if z - 1 >= 0:
+		south = out_buffer.get_voxel_f(x, y, z - 1, VoxelBuffer.CHANNEL_SDF)
+	
+	var grad_x: float
+	if x + 1 < size.x and x - 1 >= 0:
+		grad_x = (east - west) / (2.0 * step)
+	elif x + 1 < size.x:
+		grad_x = (east - center) / step
+	elif x - 1 >= 0:
+		grad_x = (center - west) / step
+	else:
+		grad_x = 0.0
+	
+	var grad_z: float
+	if z + 1 < size.z and z - 1 >= 0:
+		grad_z = (north - south) / (2.0 * step)
+	elif z + 1 < size.z:
+		grad_z = (north - center) / step
+	elif z - 1 >= 0:
+		grad_z = (center - south) / step
+	else:
+		grad_z = 0.0
+	
+	return sqrt(grad_x * grad_x + grad_z * grad_z)
 
 
 func _get_subsurface_material(biome_id: int) -> int:

@@ -1,0 +1,81 @@
+shader_type compute;
+render_mode skip_vertex_transform;
+
+// Writes biome id (R, 0..1 normalized) and distance-to-edge (G, 0..1) for Voronoi/Worley F2
+// Tunable via push constants:
+// - biome_count: number of discrete biomes
+// - world_size: total meters across XZ (0..world_size mapped to 0..1 UV)
+// - cell_scale: approximate cell size in meters
+// - jitter: 0..1 to wobble sites inside each cell
+// - seed: uint for deterministic hashing
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Optional jitter sampler; can be left unbound
+uniform sampler2D u_seed_noise;
+
+// Output storage image; R = biome id normalized, G = distance to edge
+// Bind this as storage texture (R32G32_SFLOAT recommended)
+layout(rg32f, set = 0, binding = 1) uniform writeonly image2D u_out_biome;
+
+layout(push_constant, std430) uniform Params {
+    int biome_count;
+    float world_size;
+    float cell_scale;
+    float jitter;
+    uint seed;
+} p;
+
+uint hash(uvec2 v) {
+    v = v * 1664525u + 1013904223u;
+    v ^= (v.yx);
+    v *= 1664525u;
+    return v.x;
+}
+
+float rand(uvec2 v) {
+    return float(hash(v)) * (1.0 / 4294967295.0);
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_out_biome);
+    if (pix.x >= size.x || pix.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(pix) + vec2(0.5)) / vec2(size);
+    vec2 world = uv * p.world_size;
+
+    float cell = p.cell_scale;
+    ivec2 base = ivec2(floor(world / cell));
+
+    float best1 = 1e9;
+    float best2 = 1e9;
+    int best_biome = 0;
+
+    // 3x3 neighbors around cell
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            ivec2 c = base + ivec2(i, j);
+            uvec2 h = uvec2(c) ^ uvec2(p.seed);
+
+            vec2 jitter_off = vec2(rand(h), rand(h + 17u)) * p.jitter * cell;
+            vec2 site = (vec2(c) * cell) + (cell * 0.5) + jitter_off;
+
+            float d = distance(world, site);
+            if (d < best1) {
+                best2 = best1;
+                best1 = d;
+                best_biome = int(hash(h * 31337u) % uint(max(p.biome_count, 1)));
+            } else if (d < best2) {
+                best2 = d;
+            }
+        }
+    }
+
+    float dist_edge = clamp((best2 - best1) / cell, 0.0, 1.0);
+    float biome_norm = float(best_biome) / float(max(p.biome_count - 1, 1));
+
+    imageStore(u_out_biome, pix, vec4(biome_norm, dist_edge, 0.0, 1.0));
+}

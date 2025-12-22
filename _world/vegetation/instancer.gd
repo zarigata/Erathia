@@ -28,12 +28,14 @@ const VISIBILITY_RANGES: Dictionary = {
 	VegetationManager.VegetationType.GRASS_TUFT: 64.0  # Reduced from 96m for performance
 }
 
+const MAX_GRASS_DENSITY: float = 0.15
+
 # =============================================================================
 # EXPORTS
 # =============================================================================
 
 @export var enabled: bool = true
-@export var streaming_radius: int = 8  # Chunks around player to populate (reduced for performance)
+@export var streaming_radius: int = 6  # Further reduced for performance and to avoid overdraw
 @export var debug_logging: bool = false
 
 # =============================================================================
@@ -53,13 +55,22 @@ var _chunk_instance_indices: Dictionary = {}  # Vector3i -> Array of {type, vari
 var _pending_chunks: Array[Vector3i] = []
 var _terrain_ready_chunks: Dictionary = {}  # Vector3i -> bool (chunks with LOD0 terrain ready)
 var _deferred_chunks: Array[Vector3i] = []  # Chunks waiting for terrain to be ready
+var _chunk_biomes: Dictionary[Vector3i, int] = {}  # Vector3i -> biome_id captured from chunk_generated
+var _origin_fix_reloaded: bool = false
 
 # Player reference for streaming
 var _player: Node3D
 
 # Processing state
 var _is_processing: bool = false
-var _chunks_per_frame: int = 4  # Increased for faster streaming
+var _chunks_per_frame: int = 2  # Lower to reduce per-frame load and FPS spikes
+var _chunk_log_budget: int = 10  # limit noisy chunk_generated logging to reduce FPS impact
+
+var _connection_verified: bool = false
+var _connection_attempts: int = 0
+var _debug_last_placements: Dictionary = {}
+var _biome_query_counts: Dictionary = {}
+var _last_connection_status: Dictionary = {}
 
 # =============================================================================
 # INITIALIZATION
@@ -89,9 +100,22 @@ func _ready() -> void:
 	call_deferred("_find_player")
 	
 	# Connect to terrain signals if available
-	_connect_terrain_signals()
+	call_deferred("_connect_terrain_signals")
 	
-	print("[VegetationInstancer] Initialized with terrain: %s" % _terrain.name)
+	# Retry connection after 1s if first attempt fails
+	get_tree().create_timer(1.0).timeout.connect(func ():
+		if not _verify_signal_connection():
+			if debug_logging:
+				print("[VegetationInstancer] Retrying terrain signal connection after delay")
+			_connect_terrain_signals()
+	)
+	
+	# Schedule vegetation spawn verification a few seconds after start
+	get_tree().create_timer(5.0).timeout.connect(_verify_vegetation_spawning)
+	
+	if debug_logging:
+		var generator_name := _terrain.generator.get_class() if _terrain and _terrain.generator else "null"
+		print("[VegetationInstancer] Initialized with terrain: %s | generator: %s" % [_terrain.name, generator_name])
 
 
 func _setup_multimesh_instances() -> void:
@@ -181,13 +205,52 @@ func _find_player() -> void:
 
 
 func _connect_terrain_signals() -> void:
-	# Try to connect to BiomeGenerator's chunk_generated signal
-	if _terrain.generator:
-		if _terrain.generator.has_signal("chunk_generated"):
-			_terrain.generator.chunk_generated.connect(_on_chunk_generated)
-			print("[VegetationInstancer] Connected to chunk_generated signal")
-		else:
-			print("[VegetationInstancer] Generator has no chunk_generated signal, using polling")
+	# Try to connect to BiomeGenerator's chunk_generated signal (deferred-safe)
+	if not _terrain:
+		push_warning("[VegetationInstancer] Cannot connect terrain signals: no terrain")
+		return
+	
+	var generator := _terrain.generator
+	if not generator:
+		if debug_logging:
+			print("[VegetationInstancer] Terrain has no generator yet; will retry")
+		return
+	
+	if not generator.has_signal("chunk_generated"):
+		push_warning("[VegetationInstancer] Generator has no chunk_generated signal, using polling fallback")
+		return
+	
+	if generator.is_connected("chunk_generated", Callable(self, "_on_chunk_generated")):
+		if debug_logging:
+			print("[VegetationInstancer] chunk_generated already connected")
+		return
+	
+	var err: Error = generator.chunk_generated.connect(_on_chunk_generated)
+	if err == OK and debug_logging:
+		print("[VegetationInstancer] Connected to chunk_generated signal")
+	elif err != OK:
+		push_warning("[VegetationInstancer] Failed to connect chunk_generated: %s" % err)
+	
+	_connection_attempts += 1
+	_connection_verified = _verify_signal_connection()
+	if _connection_verified and not _origin_fix_reloaded:
+		_origin_fix_reloaded = true
+		reload_vegetation()
+	if debug_logging:
+		print("[VegetationInstancer] Connection attempt #%d -> verified=%s" % [_connection_attempts, str(_connection_verified)])
+
+
+func _verify_signal_connection() -> bool:
+	if not _terrain or not _terrain.generator:
+		if debug_logging:
+			print("[VegetationInstancer] _verify_signal_connection: terrain/generator missing")
+		return false
+	var generator := _terrain.generator
+	var connected := generator.is_connected("chunk_generated", Callable(self, "_on_chunk_generated"))
+	if debug_logging:
+		var signals := generator.get_signal_list()
+		print("[VegetationInstancer] Verify connection -> connected=%s | generator=%s | signals=%s" % [str(connected), generator.get_class(), signals])
+	return connected
 
 
 # =============================================================================
@@ -264,14 +327,16 @@ func _process_pending_chunks() -> void:
 
 func _on_chunk_generated(chunk_origin: Vector3i, biome_id: int) -> void:
 	# Normalize to XZ only (Y=0) for vegetation - we don't care about vertical chunks
-	var veg_chunk := Vector3i(chunk_origin.x * CHUNK_SIZE, 0, chunk_origin.z * CHUNK_SIZE)
+	var veg_chunk := Vector3i(chunk_origin.x, 0, chunk_origin.z)
 	
 	# Debug logging
-	if debug_logging:
+	if debug_logging and _chunk_log_budget > 0:
 		print("[VegetationInstancer] chunk_generated: raw=%s, normalized=%s, biome=%d" % [chunk_origin, veg_chunk, biome_id])
+		_chunk_log_budget -= 1
 	
 	# Mark this chunk as terrain-ready (LOD 0 generated)
 	_terrain_ready_chunks[veg_chunk] = true
+	_chunk_biomes[veg_chunk] = biome_id
 	
 	# If this chunk was deferred, move it to pending
 	var deferred_idx := _deferred_chunks.find(veg_chunk)
@@ -290,12 +355,20 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	if _populated_chunks.has(chunk_origin):
 		return
 	
-	# Skip terrain ready check - populate based on streaming position
-	# The terrain should already be generated by the time we get here
+	if not _terrain:
+		if debug_logging:
+			push_warning("[VegetationInstancer] No terrain available for chunk %s" % chunk_origin)
+		return
 	
-	# Get biome at chunk center
-	var chunk_center := Vector3(chunk_origin.x + CHUNK_SIZE * 0.5, 0, chunk_origin.z + CHUNK_SIZE * 0.5)
-	var biome_id := _get_biome_at_position(chunk_center)
+	# Use cached biome from generator; fall back to sampling if missing
+	var biome_id: int = int(_chunk_biomes.get(chunk_origin, -1))
+	if biome_id == -1:
+		var chunk_center := Vector3(chunk_origin.x + CHUNK_SIZE * 0.5, 0, chunk_origin.z + CHUNK_SIZE * 0.5)
+		biome_id = _get_biome_at_position(chunk_center)
+	if biome_id == -1:
+		if debug_logging:
+			push_warning("[VegetationInstancer] Biome id null for chunk %s" % chunk_origin)
+		return
 	
 	# Debug logging
 	if debug_logging:
@@ -303,6 +376,10 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	
 	# Get vegetation rules for biome
 	var rules := VegetationManager.get_biome_rules(biome_id)
+	if rules.is_empty():
+		if debug_logging:
+			print("[VegetationInstancer] No rules for biome %d, skipping chunk %s" % [biome_id, chunk_origin])
+		return
 	
 	# Sample placements
 	var placements := _placement_sampler.sample_chunk(
@@ -312,6 +389,9 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 		_terrain,
 		rules
 	)
+	
+	if _terrain and not _terrain.has_method("get_voxel_tool") and debug_logging:
+		push_warning("[VegetationInstancer] Terrain has no get_voxel_tool; placements may be empty")
 	
 	# If placement yields zero results and terrain might not be ready,
 	# requeue the chunk for a later attempt instead of marking as populated
@@ -335,6 +415,21 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	
 	if placements.size() > 0:
 		VegetationManager.vegetation_populated.emit(chunk_origin, placements.size())
+		if debug_logging:
+			var counts := _summarize_placements(placements)
+			_debug_last_placements[chunk_origin] = counts
+			print("[VegetationInstancer] Chunk %s populated: %s" % [chunk_origin, str(counts)])
+
+
+func _summarize_placements(placements: Array) -> Dictionary:
+	var summary := {
+		"total": placements.size(),
+		"by_type": {}
+	}
+	for placement in placements:
+		var t: int = placement.get("type", -1)
+		summary["by_type"][t] = summary["by_type"].get(t, 0) + 1
+	return summary
 
 
 func _unload_chunk(chunk_origin: Vector3i) -> void:
@@ -372,6 +467,7 @@ func _unload_chunk(chunk_origin: Vector3i) -> void:
 	_chunk_instance_indices.erase(chunk_origin)
 	_populated_chunks.erase(chunk_origin)
 	_terrain_ready_chunks.erase(chunk_origin)
+	_chunk_biomes.erase(chunk_origin)
 	
 	# Also clear from VegetationManager
 	VegetationManager.unload_chunk(chunk_origin)
@@ -461,6 +557,8 @@ func _add_instance(placement: Dictionary, chunk_origin: Vector3i) -> void:
 				push_warning("[VegetationInstancer] Using fallback mesh for type %d variant %s" % [veg_type, variant])
 		if mesh:
 			mm.mesh = mesh
+			if debug_logging:
+				print("[VegetationInstancer] Assigned mesh for type %d variant %s biome %d seed %d" % [veg_type, variant, biome_id, instance_seed])
 	
 	# Add instance
 	var visible_count := mm.visible_instance_count
@@ -642,9 +740,11 @@ func _get_biome_at_position(world_pos: Vector3) -> int:
 		# Convert name back to ID (simplified)
 		for biome_id in MapGenerator.Biome.values():
 			if BiomeManager.get_biome_name(biome_id) == biome_name:
+				_biome_query_counts[biome_id] = _biome_query_counts.get(biome_id, 0) + 1
 				return biome_id
 	
 	# Fallback to PLAINS
+	_biome_query_counts[MapGenerator.Biome.PLAINS] = _biome_query_counts.get(MapGenerator.Biome.PLAINS, 0) + 1
 	return MapGenerator.Biome.PLAINS
 
 
@@ -676,6 +776,19 @@ func reload_vegetation() -> void:
 	print("[VegetationInstancer] Vegetation reload triggered")
 
 
+func get_connection_status() -> Dictionary:
+	return {
+		"connected": _verify_signal_connection(),
+		"attempts": _connection_attempts,
+		"terrain": _terrain.name if _terrain else "none",
+		"generator": _terrain.generator.get_class() if _terrain and _terrain.generator else "none"
+	}
+
+
+func trigger_test_signal(chunk_origin: Vector3i, biome_id: int) -> void:
+	_on_chunk_generated(chunk_origin, biome_id)
+
+
 ## Get instance count for a vegetation type (sum of all variants)
 func get_instance_count(veg_type: int) -> int:
 	var type_variants: Dictionary = _multimesh_instances.get(veg_type, {})
@@ -702,6 +815,32 @@ func set_type_visible(veg_type: int, vis: bool) -> void:
 		var mmi: MultiMeshInstance3D = type_variants[variant]
 		if mmi:
 			mmi.visible = vis
+
+
+func _verify_vegetation_spawning() -> void:
+	if not _player or not _terrain:
+		if debug_logging:
+			print("[VegetationInstancer] Spawn verification skipped (missing player/terrain)")
+		return
+	
+	var results: Array[String] = []
+	var player_chunk := Vector3i(int(_player.global_position.x / CHUNK_SIZE) * CHUNK_SIZE, 0, int(_player.global_position.z / CHUNK_SIZE) * CHUNK_SIZE)
+	var offsets := [
+		Vector3i.ZERO,
+		Vector3i(CHUNK_SIZE, 0, 0),
+		Vector3i(-CHUNK_SIZE, 0, 0),
+		Vector3i(0, 0, CHUNK_SIZE),
+		Vector3i(0, 0, -CHUNK_SIZE)
+	]
+	
+	for off in offsets:
+		var co: Vector3i = player_chunk + off
+		var count := 0
+		if _chunk_instance_indices.has(co):
+			count = _chunk_instance_indices[co].size()
+		results.append("%s -> %d" % [co, count])
+	
+	print("[VegetationInstancer] Spawn verification around player: %s" % ", ".join(results))
 
 
 ## Set enabled state

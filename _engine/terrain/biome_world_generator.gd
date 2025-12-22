@@ -37,8 +37,9 @@ const MAX_SLOPE_DEGREES: float = 35.0
 const MAX_SLOPE_GRADIENT: float = 0.7  # tan(35°) ≈ 0.7
 
 # Buffer zone settings - controls how smoothly biomes blend
-const BUFFER_ZONE_RADIUS: float = 128.0  # Increased for smoother transitions
-const HEIGHT_SAMPLE_RADIUS: float = 96.0  # How far to sample for height blending
+const BUFFER_ZONE_RADIUS: float = 500.0  # Increased for smoother transitions
+const HEIGHT_SAMPLE_RADIUS: float = 400.0  # How far to sample for height blending
+const HEIGHT_BLEND_STRENGTH: float = 0.3  # Modulation factor for height offsets
 
 # =============================================================================
 # NOISE GENERATORS
@@ -54,32 +55,37 @@ var _mountain_noise: FastNoiseLite   # Mountain ridges
 
 var _world_seed: int = 0
 var _initialized: bool = false
+var _emit_debug_enabled: bool = false
+var _emission_count: int = 0
+var _emitted_chunks: Dictionary = {}
+var _last_emitted_chunk: Vector3i = Vector3i.ZERO
+var _last_emitted_biome: int = MapGenerator.Biome.PLAINS
 
 # =============================================================================
 # BIOME BASE HEIGHTS (meters above sea level) - HIGH ALTITUDES PRESERVED
 # =============================================================================
 
 var _biome_base_heights: Dictionary = {
-	# Primary biomes - keep high altitudes!
+	# Reduced heights for smoother transitions
 	MapGenerator.Biome.PLAINS: 10.0,
-	MapGenerator.Biome.FOREST: 20.0,
-	MapGenerator.Biome.DESERT: 15.0,
+	MapGenerator.Biome.FOREST: 15.0,        # Was 20.0
+	MapGenerator.Biome.DESERT: 12.0,        # Was 15.0
 	MapGenerator.Biome.SWAMP: 3.0,
-	MapGenerator.Biome.TUNDRA: 40.0,
-	MapGenerator.Biome.JUNGLE: 8.0,           # Low - only near water
+	MapGenerator.Biome.TUNDRA: 35.0,        # Was 40.0
+	MapGenerator.Biome.JUNGLE: 8.0,
 	MapGenerator.Biome.SAVANNA: 12.0,
-	MapGenerator.Biome.MOUNTAIN: 120.0,       # HIGH mountains
-	MapGenerator.Biome.BEACH: 2.0,            # At sea level
+	MapGenerator.Biome.MOUNTAIN: 80.0,      # Was 120.0 - REDUCED
+	MapGenerator.Biome.BEACH: 2.0,
 	MapGenerator.Biome.DEEP_OCEAN: -50.0,
-	MapGenerator.Biome.ICE_SPIRES: 150.0,     # VERY HIGH ice peaks
-	MapGenerator.Biome.VOLCANIC: 100.0,       # HIGH volcanic
-	MapGenerator.Biome.MUSHROOM: 30.0,
-	# Transition biomes - heights are interpolated dynamically
+	MapGenerator.Biome.ICE_SPIRES: 100.0,   # Was 150.0 - REDUCED
+	MapGenerator.Biome.VOLCANIC: 70.0,      # Was 100.0 - REDUCED
+	MapGenerator.Biome.MUSHROOM: 25.0,      # Was 30.0
+	# Transition biomes - interpolated heights
 	MapGenerator.Biome.SLOPE_PLAINS: 10.0,
 	MapGenerator.Biome.SLOPE_FOREST: 20.0,
-	MapGenerator.Biome.SLOPE_MOUNTAIN: 60.0,
-	MapGenerator.Biome.SLOPE_SNOW: 80.0,
-	MapGenerator.Biome.SLOPE_VOLCANIC: 50.0,
+	MapGenerator.Biome.SLOPE_MOUNTAIN: 50.0,  # Was 60.0
+	MapGenerator.Biome.SLOPE_SNOW: 65.0,      # Was 80.0
+	MapGenerator.Biome.SLOPE_VOLCANIC: 45.0,  # Was 50.0
 	MapGenerator.Biome.CLIFF_COASTAL: 5.0,
 	MapGenerator.Biome.SLOPE_DESERT: 15.0,
 }
@@ -261,11 +267,17 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 				out_buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
 				
 				# Get material for this voxel
-				var material: int = _get_material(biome, sdf, world_y, terrain_height)
+				var material: int = _get_material(biome, sdf, world_y, terrain_height, Vector3(world_x, world_y, world_z))
 				out_buffer.set_voxel(material, x, y, z, VoxelBuffer.CHANNEL_INDICES)
 	
 	# Emit signal for vegetation spawning (LOD 0 only)
 	if lod == 0:
+		_emission_count += 1
+		_last_emitted_chunk = origin
+		_last_emitted_biome = primary_biome
+		_emitted_chunks[origin] = primary_biome
+		if _emit_debug_enabled:
+			print("[BiomeWorldGenerator] Emitting chunk_generated #%d origin=%s biome=%d" % [_emission_count, origin, primary_biome])
 		chunk_generated.emit(origin, primary_biome)
 
 
@@ -301,6 +313,9 @@ func _get_smooth_terrain_height(world_x: float, world_z: float) -> float:
 	# Sample heights from multiple nearby points for smooth blending
 	var blended_height: float = _sample_blended_height(world_x, world_z)
 	
+	# NEW: Clamp slope gradient to max 35 degrees
+	blended_height = _apply_slope_limiting(world_x, world_z, blended_height)
+	
 	# Apply ocean depth
 	var ocean_depth: float = -35.0
 	var final_height: float = lerpf(blended_height, ocean_depth, ocean_factor)
@@ -314,45 +329,57 @@ func _get_smooth_terrain_height(world_x: float, world_z: float) -> float:
 
 
 func _sample_blended_height(world_x: float, world_z: float) -> float:
-	## OPTIMIZED: Simple height calculation with gradient-based blending
-	## Uses biome noise directly for smooth transitions instead of expensive sampling
+	## ENHANCED: 16-point radial sampling with distance-weighted blending
 	
 	var center_biome: int = _get_primary_biome_at(world_x, world_z)
 	var center_height: float = _get_raw_biome_height(world_x, world_z, center_biome)
 	
-	# Use noise gradient to detect biome boundaries efficiently
-	# Sample only 4 cardinal points at fixed distance
-	var sample_dist: float = 64.0
-	var biomes_found: Array[int] = [center_biome]
-	var heights_sum: float = center_height
-	var weight_sum: float = 1.0
-	
-	# Cardinal samples only (4 instead of 128)
-	var offsets: Array[Vector2] = [
-		Vector2(sample_dist, 0), Vector2(-sample_dist, 0),
-		Vector2(0, sample_dist), Vector2(0, -sample_dist)
+	# Sample 16 points in radial pattern at 3 distances
+	var sample_distances: Array[float] = [
+		HEIGHT_SAMPLE_RADIUS * 0.33,  # ~133m
+		HEIGHT_SAMPLE_RADIUS * 0.66,  # ~266m
+		HEIGHT_SAMPLE_RADIUS          # ~400m
 	]
 	
-	for offset in offsets:
-		var sample_biome: int = _get_primary_biome_at(world_x + offset.x, world_z + offset.y)
-		if sample_biome != center_biome and not sample_biome in biomes_found:
-			biomes_found.append(sample_biome)
-			var other_base: float = _biome_base_heights.get(sample_biome, center_height)
-			var height_diff: float = absf(other_base - _biome_base_heights.get(center_biome, 0))
-			# Blend weight based on height difference (smoother for bigger differences)
-			var blend: float = clampf(1.0 - (height_diff / 150.0), 0.2, 1.0)
-			heights_sum += other_base * blend
-			weight_sum += blend
+	var total_weight: float = 1.0  # Center point weight
+	var weighted_height_sum: float = center_height
+	var biomes_found: Dictionary = {center_biome: true}
+	
+	# 16 directions (every 22.5 degrees)
+	for angle_idx in range(16):
+		var angle: float = (float(angle_idx) / 16.0) * TAU
+		var dir: Vector2 = Vector2(cos(angle), sin(angle))
+		
+		for dist in sample_distances:
+			var sample_x: float = world_x + dir.x * dist
+			var sample_z: float = world_z + dir.y * dist
+			var sample_biome: int = _get_primary_biome_at(sample_x, sample_z)
+			
+			# If different biome found, add to blend
+			if sample_biome != center_biome:
+				biomes_found[sample_biome] = true
+				var sample_height: float = _get_raw_biome_height(sample_x, sample_z, sample_biome)
+				
+				# Distance-based weight (closer = more influence)
+				var weight: float = 1.0 - (dist / HEIGHT_SAMPLE_RADIUS)
+				weight = weight * weight  # Quadratic falloff
+				
+				weighted_height_sum += sample_height * weight
+				total_weight += weight
+				break  # Found boundary in this direction, stop sampling further
 	
 	# If only one biome, return raw height
 	if biomes_found.size() == 1:
 		return center_height
 	
-	# Blend between biome heights for smooth transition
-	var blended_base: float = heights_sum / weight_sum
-	var terrain_variation: float = center_height - _biome_base_heights.get(center_biome, 0)
+	# Compute blended height
+	var blended_height: float = weighted_height_sum / total_weight
 	
-	return blended_base + terrain_variation * 0.5
+	# Apply smoothstep to prevent sharp transitions
+	var blend_factor: float = clampf(float(biomes_found.size() - 1) / 3.0, 0.0, 1.0)
+	blend_factor = blend_factor * blend_factor * (3.0 - 2.0 * blend_factor)  # Smoothstep
+	
+	return lerpf(center_height, blended_height, blend_factor * HEIGHT_BLEND_STRENGTH)
 
 
 func _get_raw_biome_height(world_x: float, world_z: float, biome: int) -> float:
@@ -378,7 +405,39 @@ func _get_raw_biome_height(world_x: float, world_z: float, biome: int) -> float:
 	if biome == MapGenerator.Biome.MOUNTAIN or biome == MapGenerator.Biome.ICE_SPIRES or biome == MapGenerator.Biome.VOLCANIC:
 		height += mountain_val * variation * slope_factor
 	
+	# NEW: Add subtle detail noise (+/-2m) for micro-variation
+	var detail_val: float = _detail_noise.get_noise_2d(world_x, world_z)
+	height += detail_val * 2.0 * HEIGHT_BLEND_STRENGTH  # +/-0.6m effective
+	
 	return height
+
+
+func _apply_slope_limiting(world_x: float, world_z: float, target_height: float) -> float:
+	## Limit slope to MAX_SLOPE_GRADIENT (35 degrees) by clamping height changes
+	var sample_dist: float = 8.0  # Check 8m radius
+	var max_height_change: float = sample_dist * MAX_SLOPE_GRADIENT  # ~5.6m over 8m
+	
+	# Sample 4 cardinal neighbors
+	var neighbors: Array[float] = [
+		_sample_blended_height(world_x + sample_dist, world_z),
+		_sample_blended_height(world_x - sample_dist, world_z),
+		_sample_blended_height(world_x, world_z + sample_dist),
+		_sample_blended_height(world_x, world_z - sample_dist)
+	]
+	
+	# Find average neighbor height
+	var avg_neighbor_h: float = 0.0
+	for h in neighbors:
+		avg_neighbor_h += h
+	if neighbors.size() > 0:
+		avg_neighbor_h /= neighbors.size()
+	
+	# Clamp target height to max slope from average
+	var height_diff: float = target_height - avg_neighbor_h
+	if absf(height_diff) > max_height_change:
+		target_height = avg_neighbor_h + signf(height_diff) * max_height_change
+	
+	return target_height
 
 
 # =============================================================================
@@ -490,7 +549,7 @@ func smoothstep(edge0: float, edge1: float, x: float) -> float:
 # MATERIAL ASSIGNMENT
 # =============================================================================
 
-func _get_material(biome: int, sdf: float, world_y: float, terrain_height: float) -> int:
+func _get_material(biome: int, sdf: float, world_y: float, terrain_height: float, world_pos: Vector3) -> int:
 	# Air
 	if sdf > 0.0:
 		return MAT_AIR
@@ -499,7 +558,7 @@ func _get_material(biome: int, sdf: float, world_y: float, terrain_height: float
 	
 	# Surface layer
 	if depth < SURFACE_THICKNESS:
-		return _get_surface_material(biome)
+		return _get_surface_material(biome, world_pos, terrain_height)
 	
 	# Subsurface layer
 	if depth < SURFACE_THICKNESS + DIRT_THICKNESS:
@@ -509,22 +568,55 @@ func _get_material(biome: int, sdf: float, world_y: float, terrain_height: float
 	return MAT_STONE
 
 
-func _get_surface_material(biome: int) -> int:
+func _get_surface_material(biome: int, world_pos: Vector3, terrain_height: float) -> int:
+	## Enhanced with slope-based transitions
+	
+	# Calculate terrain slope at this position
+	var slope: float = _calculate_slope_at(world_pos.x, world_pos.z)
+	
+	# If slope > 30 degrees (tan(30°) ≈ 0.577), use rock regardless of biome
+	if slope > 0.577:
+		return MAT_STONE
+	
 	match biome:
 		MapGenerator.Biome.DESERT, MapGenerator.Biome.BEACH:
 			return MAT_SAND
 		MapGenerator.Biome.TUNDRA, MapGenerator.Biome.ICE_SPIRES:
+			# Blend snow→rock on slopes 20-30 degrees
+			if slope > 0.364:  # tan(20°)
+				var blend: float = (slope - 0.364) / (0.577 - 0.364)
+				return MAT_STONE if blend > 0.5 else MAT_SNOW
 			return MAT_SNOW
 		MapGenerator.Biome.VOLCANIC, MapGenerator.Biome.MOUNTAIN:
 			return MAT_STONE
 		MapGenerator.Biome.DEEP_OCEAN:
 			return MAT_SAND
 		MapGenerator.Biome.PLAINS, MapGenerator.Biome.FOREST, MapGenerator.Biome.JUNGLE, MapGenerator.Biome.SAVANNA:
+			# Blend grass→rock on slopes 25-30 degrees
+			if slope > 0.466:  # tan(25°)
+				var blend: float = (slope - 0.466) / (0.577 - 0.466)
+				return MAT_STONE if blend > 0.5 else MAT_GRASS
 			return MAT_GRASS
 		MapGenerator.Biome.SWAMP, MapGenerator.Biome.MUSHROOM:
 			return MAT_DIRT
 		_:
 			return MAT_GRASS
+
+
+func _calculate_slope_at(world_x: float, world_z: float) -> float:
+	## Calculate terrain slope (rise/run) using 4-point gradient
+	var center_h: float = _get_smooth_terrain_height(world_x, world_z)
+	var sample_dist: float = 2.0  # 2 meters
+	
+	var h_east: float = _get_smooth_terrain_height(world_x + sample_dist, world_z)
+	var h_west: float = _get_smooth_terrain_height(world_x - sample_dist, world_z)
+	var h_north: float = _get_smooth_terrain_height(world_x, world_z + sample_dist)
+	var h_south: float = _get_smooth_terrain_height(world_x, world_z - sample_dist)
+	
+	var dx: float = (h_east - h_west) / (2.0 * sample_dist)
+	var dz: float = (h_north - h_south) / (2.0 * sample_dist)
+	
+	return sqrt(dx * dx + dz * dz)  # Gradient magnitude (tan of slope angle)
 
 
 func _get_subsurface_material(biome: int) -> int:
@@ -549,3 +641,12 @@ func get_height_at_position(pos: Vector3) -> float:
 
 func get_biome_slope(biome: int) -> float:
 	return _biome_slope.get(biome, 0.3)
+
+
+func get_signal_emission_stats() -> Dictionary:
+	return {
+		"emission_count": _emission_count,
+		"last_chunk": _last_emitted_chunk,
+		"last_biome": _last_emitted_biome,
+		"unique_chunks": _emitted_chunks.size()
+	}

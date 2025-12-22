@@ -65,6 +65,8 @@ _engine/terrain/
 ├── ore_generator.gd              # Main generator with ore veins
 ├── terrain_material.tres         # ShaderMaterial reference
 ├── terrain_flat_shading.gdshader # Multi-material flat shader
+├── biome_gpu_sdf.gdshader        # GLSL shader for SDF + material generation
+├── biome_gpu_generator.tres      # VoxelGeneratorShader configuration
 └── README.md                     # This file
 ```
 
@@ -74,3 +76,30 @@ _engine/terrain/
 - Add more ore types (copper, gold, etc.)
 - Add cave systems (SDF subtraction)
 - Convert to VoxelGeneratorGraph for visual editing
+
+## GPU Biome-First Terrain Generator
+
+### Architecture
+- **Shader**: `biome_gpu_sdf.gdshader` — GLSL shader for SDF + material generation
+- **Resource**: `biome_gpu_generator.tres` — VoxelGeneratorShader configuration
+- **Channels**: 
+  - `CHANNEL_SDF`: Terrain shape (negative = solid)
+  - `CHANNEL_INDICES`: Material ID (0-6)
+
+### Material Assignment Logic
+1. **Surface Layer** (SDF > -4m): Biome-specific + slope transitions
+   - Grass (plains/forest/jungle/savanna) → Rock on >25° slope
+   - Snow (tundra/ice) → Rock on >20° slope
+   - Sand (desert/beach/ocean flats), Stone (mountains/volcanic)
+2. **Subsurface** (SDF -4m to -10m): Dirt (or sand for deserts/beach)
+3. **Deep** (SDF < -10m): Stone + ore veins (3D noise, biome-adjusted richness)
+
+### Ore Generation
+- Frequency: 0.02 (50m wavelength)
+- Threshold: 0.6 base, adjusted by biome richness (0.5–2.0x)
+- Min depth: 10m below surface
+- Rich biomes: Volcanic (2.0x), Mountain (1.8x), Ice Spires (1.5x)
+
+### Performance
+- GPU path outputs SDF + material in one pass for Transvoxel meshing
+- CPU fallback remains available via existing generators if needed

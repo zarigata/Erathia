@@ -536,7 +536,7 @@ func _find_safe_spawn_position() -> Vector3:
 			
 			if ray_result:
 				var ground_pos: Vector3 = ray_result.position
-				var ground_y := ground_pos.y + 2.0  # Spawn slightly above ground
+				var ground_y := ground_pos.y + 4.0  # Spawn slightly above ground to avoid embedding
 				
 				# Check biome is not dangerous
 				var biome_id := _get_biome_at_position(ground_pos)
@@ -549,4 +549,4 @@ func _find_safe_spawn_position() -> Vector3:
 		offset_distance += 16.0
 	
 	# Fallback to original position with safe Y
-	return Vector3(spawn_position.x, 60.0, spawn_position.z)
+	return Vector3(spawn_position.x, 80.0, spawn_position.z)

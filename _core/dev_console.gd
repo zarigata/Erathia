@@ -67,6 +67,9 @@ func _register_core_commands() -> void:
 	register_command("veg_toggle", _cmd_veg_toggle, "Toggle vegetation type: veg_toggle <tree|bush|rock|grass>")
 	register_command("veg_show_zones", _cmd_veg_show_zones, "Toggle vegetation placement zone visualization")
 	register_command("veg_clear_cache", _cmd_veg_clear_cache, "Clear vegetation mesh cache")
+	register_command("veg_debug", _cmd_veg_debug, "Toggle vegetation debug logging: veg_debug <on|off>")
+	register_command("veg_test_signal", _cmd_veg_test_signal, "Trigger vegetation signal manually: veg_test_signal [biome_id] [chunk_x] [chunk_z]")
+	register_command("veg_connection_status", _cmd_veg_connection_status, "Show vegetation signal connection status")
 	# World seed commands
 	register_command("show_seed", _cmd_show_seed, "Show current world seed")
 	register_command("set_seed", _cmd_set_seed, "Set world seed: set_seed <value>")
@@ -472,6 +475,59 @@ func _cmd_veg_clear_cache(args: Array[String]) -> String:
 	
 	VegetationManager.clear_mesh_cache()
 	return "Vegetation mesh cache cleared"
+
+
+func _cmd_veg_debug(args: Array[String]) -> String:
+	var instancer := _get_vegetation_instancer()
+	if instancer:
+		var enable := true
+		if not args.is_empty():
+			var val := args[0].to_lower()
+			enable = val in ["on", "true", "1"]
+		instancer.debug_logging = enable
+	if VegetationManager:
+		VegetationManager.debug_enabled = instancer.debug_logging if instancer else VegetationManager.debug_enabled
+	return "Vegetation debug logging: %s" % ("ON" if instancer and instancer.debug_logging else "OFF")
+
+
+func _cmd_veg_test_signal(args: Array[String]) -> String:
+	var instancer: VegetationInstancer = _get_vegetation_instancer()
+	if not instancer:
+		return "Error: VegetationInstancer not found"
+	
+	var biome_id := MapGenerator.Biome.PLAINS
+	var chunk_x := 0
+	var chunk_z := 0
+	if args.size() >= 1:
+		biome_id = args[0].to_int()
+	if args.size() >= 3:
+		chunk_x = args[1].to_int()
+		chunk_z = args[2].to_int()
+	else:
+		var player := _get_player()
+		if player:
+			var chunk_size: int = instancer.CHUNK_SIZE
+			chunk_x = int(player.global_position.x / chunk_size)
+			chunk_z = int(player.global_position.z / chunk_size)
+	
+	var chunk_origin := Vector3i(chunk_x, 0, chunk_z)
+	instancer.trigger_test_signal(chunk_origin, biome_id)
+	return "Triggered chunk_generated for chunk (%d, %d) biome %d" % [chunk_x, chunk_z, biome_id]
+
+
+func _cmd_veg_connection_status(args: Array[String]) -> String:
+	var instancer := _get_vegetation_instancer()
+	if not instancer:
+		return "Error: VegetationInstancer not found"
+	if not instancer.has_method("get_connection_status"):
+		return "VegetationInstancer missing connection status API"
+	var status: Dictionary = instancer.get_connection_status()
+	return "Vegetation signal connection -> connected=%s attempts=%d terrain=%s generator=%s" % [
+		str(status.get("connected", false)),
+		status.get("attempts", 0),
+		status.get("terrain", "none"),
+		status.get("generator", "none")
+	]
 
 
 func _get_vegetation_instancer() -> Node:

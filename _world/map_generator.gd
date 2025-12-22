@@ -23,6 +23,10 @@ const WORLD_SIZE: float = 16000.0  # 16km x 16km
 const PIXEL_SCALE: float = WORLD_SIZE / MAP_SIZE  # ~7.8125m per pixel
 
 const FACTION_NOISE_FREQUENCY: float = 0.0005
+const GRADIENT_THRESHOLD: float = 0.35  # |dh| > 35% triggers transition biome
+const ELEVATION_LOW_THRESHOLD: int = 85   # 0-85: low elevation (beach/plains)
+const ELEVATION_MID_THRESHOLD: int = 170  # 85-170: mid elevation (forest/hills)
+# 170-255: high elevation (mountain/snow)
 
 # =============================================================================
 # BIOME ENUM
@@ -197,7 +201,7 @@ func _setup_noise_layers() -> void:
 	_continentalness_noise = FastNoiseLite.new()
 	_continentalness_noise.seed = world_seed
 	_continentalness_noise.noise_type = FastNoiseLite.TYPE_CELLULAR
-	_continentalness_noise.frequency = 0.0008
+	_continentalness_noise.frequency = 0.0012  # Increased for more varied coastlines
 	_continentalness_noise.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
 	_continentalness_noise.cellular_return_type = FastNoiseLite.RETURN_CELL_VALUE
 	
@@ -340,6 +344,112 @@ func _calculate_elevation(continentalness: float, altitude: float) -> int:
 	return int(elevation * 255.0)
 
 
+func _compute_elevation_gradient(image: Image, x: int, y: int) -> Dictionary:
+	"""
+	Compute max elevation difference in 3x3 neighborhood.
+	Returns: {max_dh: float, avg_elevation: int, neighbor_biomes: Array[int]}
+	"""
+	var center_pixel := image.get_pixel(x, y)
+	var center_elevation: int = int(center_pixel.b8)
+	
+	var max_dh: float = 0.0
+	var elevation_sum: int = center_elevation
+	var neighbor_biomes: Array[int] = [int(center_pixel.r8)]
+	var sample_count: int = 1
+	
+	# Sample 8-connected neighbors
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			
+			var nx: int = x + dx
+			var ny: int = y + dy
+			
+			# Clamp to map bounds
+			if nx < 0 or nx >= MAP_SIZE or ny < 0 or ny >= MAP_SIZE:
+				continue
+			
+			var neighbor_pixel := image.get_pixel(nx, ny)
+			var neighbor_elevation: int = int(neighbor_pixel.b8)
+			var neighbor_biome: int = int(neighbor_pixel.r8)
+			
+			# Compute normalized elevation difference
+			var dh: float = abs(neighbor_elevation - center_elevation) / 255.0
+			max_dh = max(max_dh, dh)
+			
+			elevation_sum += neighbor_elevation
+			neighbor_biomes.append(neighbor_biome)
+			sample_count += 1
+	
+	var avg_elevation: int = elevation_sum / sample_count
+	
+	return {
+		"max_dh": max_dh,
+		"avg_elevation": avg_elevation,
+		"neighbor_biomes": neighbor_biomes
+	}
+
+
+func _select_transition_biome(gradient_data: Dictionary, current_biome: int) -> int:
+	"""
+	Select appropriate transition biome based on elevation and neighbor context.
+	Returns transition biome ID or -1 if no transition needed.
+	"""
+	var avg_elevation: int = gradient_data.avg_elevation
+	var neighbor_biomes: Array = gradient_data.neighbor_biomes
+	
+	# Count biome types in neighborhood
+	var has_water := false
+	var has_mountain := false
+	var has_snow := false
+	var has_desert := false
+	var has_volcanic := false
+	var has_forest := false
+	
+	for biome_id in neighbor_biomes:
+		match biome_id:
+			Biome.DEEP_OCEAN, Biome.BEACH:
+				has_water = true
+			Biome.MOUNTAIN, Biome.ICE_SPIRES:
+				has_mountain = true
+			Biome.TUNDRA, Biome.ICE_SPIRES:
+				has_snow = true
+			Biome.DESERT, Biome.SAVANNA:
+				has_desert = true
+			Biome.VOLCANIC:
+				has_volcanic = true
+			Biome.FOREST, Biome.JUNGLE:
+				has_forest = true
+	
+	# Assign transition biome based on elevation + context
+	if avg_elevation < ELEVATION_LOW_THRESHOLD:
+		# Low elevation: coastal/plains transitions
+		if has_water:
+			return Biome.CLIFF_COASTAL
+		return Biome.SLOPE_PLAINS
+	
+	elif avg_elevation < ELEVATION_MID_THRESHOLD:
+		# Mid elevation: forest/desert transitions
+		if current_biome == Biome.DESERT:
+			return Biome.SLOPE_DESERT
+		if has_desert:
+			return Biome.SLOPE_DESERT
+		if has_forest or current_biome == Biome.FOREST:
+			return Biome.SLOPE_FOREST
+		return Biome.SLOPE_PLAINS  # Default mid-slope
+	
+	else:
+		# High elevation: mountain/snow/volcanic transitions
+		if current_biome == Biome.VOLCANIC:
+			return Biome.SLOPE_VOLCANIC
+		if has_volcanic:
+			return Biome.SLOPE_VOLCANIC
+		if has_snow or current_biome == Biome.ICE_SPIRES:
+			return Biome.SLOPE_SNOW
+		return Biome.SLOPE_MOUNTAIN
+
+
 # =============================================================================
 # MAP GENERATION
 # =============================================================================
@@ -396,6 +506,42 @@ func generate_world_map() -> void:
 			# Encode RGB: Biome (R), Faction (G), Elevation (B)
 			var color := Color8(biome_id, faction_id, elevation)
 			image.set_pixel(x, y, color)
+	
+	# === PASS 1 COMPLETE: Primary biomes generated ===
+	
+	# === PASS 2: Gradient Detection & Transition Biome Assignment ===
+	print("[MapGenerator] Pass 2: Detecting gradients and assigning transition biomes...")
+	
+	var transition_count: int = 0
+	
+	for y in range(MAP_SIZE):
+		for x in range(MAP_SIZE):
+			var pixel := image.get_pixel(x, y)
+			var current_biome: int = int(pixel.r8)
+			var current_elevation: int = int(pixel.b8)
+			
+			# Skip water biomes (no transitions needed)
+			if current_biome == Biome.DEEP_OCEAN:
+				continue
+			
+			# Compute gradient
+			var gradient_data := _compute_elevation_gradient(image, x, y)
+			
+			# Check if steep enough for transition biome
+			if gradient_data.max_dh > GRADIENT_THRESHOLD:
+				var transition_biome := _select_transition_biome(gradient_data, current_biome)
+				
+				if transition_biome >= 0:
+					# Update biome ID (keep faction and elevation unchanged)
+					var new_color := Color8(transition_biome, pixel.g8, pixel.b8)
+					image.set_pixel(x, y, new_color)
+					
+					# Update statistics
+					biome_counts[current_biome] -= 1
+					biome_counts[transition_biome] += 1
+					transition_count += 1
+	
+	print("[MapGenerator] Pass 2 complete: %d transition biomes assigned" % transition_count)
 	
 	# Save to user:// for runtime accessibility (res:// is read-only at runtime)
 	var save_path := "user://world_map.png"
