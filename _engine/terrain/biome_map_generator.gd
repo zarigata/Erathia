@@ -55,28 +55,37 @@ func _exit_tree() -> void:
 func _initialize_device() -> void:
 	if _compute_available:
 		return
-	if not ResourceLoader.exists("res://_engine/terrain/biome_map.compute"):
+	var shader_path := "res://_engine/terrain/biome_map.compute"
+	if not FileAccess.file_exists(shader_path):
 		if not _init_warning_emitted:
 			push_warning("[BiomeMapGenerator] biome_map.compute missing; GPU biome map generation disabled")
 			_init_warning_emitted = true
 		return
-
+	
 	_rd = RenderingServer.create_local_rendering_device()
 	if not _rd:
 		push_error("[BiomeMapGenerator] Failed to create RenderingDevice")
 		return
-
-	var shader_file := load("res://_engine/terrain/biome_map.compute") as RDShaderFile
-	if not shader_file:
-		push_warning("[BiomeMapGenerator] Failed to load biome_map.compute; compute disabled")
+	
+	var shader_source := FileAccess.get_file_as_string(shader_path)
+	if shader_source.is_empty():
+		push_warning("[BiomeMapGenerator] Failed to read biome_map.compute; compute disabled")
 		_rd.free()
 		_rd = null
 		return
-
-	var shader_spirv := shader_file.get_spirv()
+	
+	var rd_source := RDShaderSource.new()
+	rd_source.set_stage_source(RenderingDevice.SHADER_STAGE_COMPUTE, shader_source)
+	var shader_spirv: RDShaderSPIRV = _rd.shader_compile_spirv_from_source(rd_source) as RDShaderSPIRV
+	if shader_spirv == null:
+		push_warning("[BiomeMapGenerator] Failed to compile biome_map.compute source; compute disabled")
+		_rd.free()
+		_rd = null
+		return
+	
 	_shader = _rd.shader_create_from_spirv(shader_spirv)
 	if not _shader.is_valid():
-		push_warning("[BiomeMapGenerator] Shader compilation failed for biome_map.compute; compute disabled")
+		push_warning("[BiomeMapGenerator] Shader creation failed for biome_map.compute; compute disabled")
 		_rd.free()
 		_rd = null
 		return

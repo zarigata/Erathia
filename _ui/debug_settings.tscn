@@ -127,6 +127,51 @@ layout_mode = 2
 button_pressed = true
 text = "Show FPS Graph"
 
+[node name="ShowGPUMetricsCheck" type="CheckBox" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+button_pressed = true
+text = "Show GPU Metrics"
+
+[node name="ShowBreakdownCheck" type="CheckBox" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+button_pressed = false
+text = "Show Frame Breakdown"
+
+[node name="CPUBudgetContainer" type="HBoxContainer" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/Performance/VBoxContainer/CPUBudgetContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "CPU Budget (ms)"
+
+[node name="CPUBudgetSpinBox" type="SpinBox" parent="Panel/TabContainer/Performance/VBoxContainer/CPUBudgetContainer"]
+layout_mode = 2
+min_value = 5.0
+max_value = 50.0
+step = 0.1
+value = 16.67
+
+[node name="GPUComputeBudgetContainer" type="HBoxContainer" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/TabContainer/Performance/VBoxContainer/GPUComputeBudgetContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "GPU Compute Budget (ms)"
+
+[node name="GPUComputeBudgetSpinBox" type="SpinBox" parent="Panel/TabContainer/Performance/VBoxContainer/GPUComputeBudgetContainer"]
+layout_mode = 2
+min_value = 1.0
+max_value = 20.0
+step = 0.1
+value = 5.0
+
+[node name="WarnBudgetCheck" type="CheckBox" parent="Panel/TabContainer/Performance/VBoxContainer"]
+layout_mode = 2
+button_pressed = true
+text = "Warn on Budget Exceed"
+
 [node name="XRay" type="Control" parent="Panel/TabContainer"]
 visible = false
 layout_mode = 2

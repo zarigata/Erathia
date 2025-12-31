@@ -24,7 +24,31 @@ var _loading_screen: CanvasLayer
 var _world_init_manager: Node
 
 
+func _validate_gpu_support() -> bool:
+	print_rich("[color=cyan][MainTerrainInit][/color] Checking GPU compute support...")
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		print_rich("[color=red][MainTerrainInit] CRITICAL: RenderingDevice is null - GPU compute unavailable. Possible reasons: Compatibility renderer, headless mode, or driver issues.[/color]")
+		push_error("[MainTerrainInit] RenderingDevice not available - GPU compute disabled")
+		return false
+	var device_name := rd.get_device_name()
+	print_rich("[color=green][MainTerrainInit] GPU Device: %s[/color]" % device_name)
+	print_rich("[color=cyan][MainTerrainInit] GPU Vendor: %s, API: %s[/color]" % [rd.get_device_vendor_name(), rd.get_device_api_version()])
+	# Quick compute capability probe
+	var compute_list := rd.compute_list_begin()
+	if compute_list == 0:
+		print_rich("[color=red][MainTerrainInit] Compute shaders not supported - GPU lacks compute capability[/color]")
+		push_error("[MainTerrainInit] Compute shaders not supported on this GPU")
+		return false
+	rd.compute_list_end()
+	print_rich("[color=green][MainTerrainInit] GPU compute validation PASSED[/color]")
+	return true
+
+
 func _ready() -> void:
+	var gpu_supported := _validate_gpu_support()
+	if not gpu_supported:
+		push_warning("[MainTerrainInit] GPU compute validation failed; continuing with fallback-capable initialization")
 	# Delete old world map to force regeneration with new seed
 	_delete_old_world_map()
 	
@@ -94,21 +118,35 @@ func _initialize_generator(seed_manager: Node) -> void:
 	if seed_manager and seed_manager.has_method("get_world_seed"):
 		seed_value = seed_manager.get_world_seed()
 	
-	var gpu_wrapper := preload("res://_engine/terrain/gpu_terrain_generator_wrapper.gd").new()
-	if gpu_wrapper and gpu_wrapper.is_gpu_available():
-		_gpu_generator = gpu_wrapper
+	print_rich("[color=cyan][MainTerrainInit] Attempting GPU terrain generator initialization...[/color]")
+	var gpu_generator := preload("res://_engine/terrain/gpu_terrain_generator.gd").new()
+	if gpu_generator and gpu_generator.is_gpu_available():
+		_gpu_generator = gpu_generator
 		if _gpu_generator.has_method("update_seed"):
 			_gpu_generator.update_seed(seed_value)
 		_terrain.generator = _gpu_generator
-		print("[MainTerrainInit] Using GPU shader terrain generator")
+		print_rich("[color=green][MainTerrainInit] GPU terrain generator initialized successfully[/color]")
 	else:
-		push_warning("[MainTerrainInit] GPU compute not available, falling back to BiomeAwareGenerator")
-		_biome_generator = _terrain.generator as BiomeAwareGenerator
-		if not _biome_generator:
-			_biome_generator = preload("res://_engine/terrain/biome_aware_generator.gd").new()
-		if _biome_generator and _biome_generator.has_method("update_seed"):
-			_biome_generator.update_seed(seed_value)
-		_terrain.generator = _biome_generator
+		push_warning("[MainTerrainInit] GPU compute unavailable; falling back to CPU BiomeAwareGenerator")
+		if gpu_generator and gpu_generator.has_method("get_gpu_dispatcher"):
+			var dispatcher: Object = gpu_generator.get_gpu_dispatcher()
+			if dispatcher == null:
+				print_rich("[color=yellow][MainTerrainInit] GPU dispatcher not ready[/color]")
+			elif dispatcher.has_method("is_ready") and not dispatcher.is_ready():
+				print_rich("[color=yellow][MainTerrainInit] GPU dispatcher failed initialization (shader/pipeline issue)[/color]")
+		if gpu_generator and gpu_generator.has_method("has_biome_texture") and not gpu_generator.has_biome_texture():
+			print_rich("[color=yellow][MainTerrainInit] Biome map texture not loaded[/color]")
+		print_rich("[color=yellow][MainTerrainInit] Falling back to CPU BiomeAwareGenerator[/color]")
+		var cpu_generator := preload("res://_engine/terrain/biome_aware_generator.gd").new()
+		if cpu_generator:
+			_biome_generator = cpu_generator
+			if _biome_generator.has_method("update_seed"):
+				_biome_generator.update_seed(seed_value)
+			_terrain.generator = _biome_generator
+			print("[MainTerrainInit] CPU BiomeAwareGenerator assigned")
+		else:
+			push_error("[MainTerrainInit] Failed to instantiate BiomeAwareGenerator fallback")
+			return
 
 	# Connect GPU biome map updates if applicable
 	if _gpu_generator:
@@ -280,3 +318,35 @@ func _force_terrain_regeneration() -> void:
 	await get_tree().process_frame
 	
 	print("[MainTerrainInit] Terrain regeneration triggered")
+
+
+func get_gpu_info() -> Dictionary:
+	var rd := RenderingServer.get_rendering_device()
+	var device_name := ""
+	var vendor := ""
+	var api_version := ""
+	var compute_available := false
+	if rd:
+		device_name = rd.get_device_name()
+		vendor = rd.get_device_vendor_name()
+		api_version = rd.get_device_api_version()
+		var compute_list := rd.compute_list_begin()
+		if compute_list != 0:
+			compute_available = true
+			rd.compute_list_end()
+	var generator_type := "CPU"
+	var dispatcher_ready := false
+	if _gpu_generator:
+		generator_type = "GPU"
+		if _gpu_generator.has_method("get_gpu_dispatcher"):
+			var dispatcher := _gpu_generator.get_gpu_dispatcher()
+			if dispatcher and dispatcher.has_method("is_ready"):
+				dispatcher_ready = dispatcher.is_ready()
+	return {
+		"device_name": device_name,
+		"vendor": vendor,
+		"api_version": api_version,
+		"compute_available": compute_available,
+		"generator_type": generator_type,
+		"dispatcher_ready": dispatcher_ready
+	}

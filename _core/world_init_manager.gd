@@ -65,6 +65,11 @@ var _player: Node3D
 var _prewarmed_chunks: Dictionary = {}
 var _chunks_to_prewarm: Array[Vector3i] = []
 var _prewarm_complete: bool = false
+var _chunks_generated: Dictionary = {}  # Vector3i -> bool
+var _chunks_pending: int = 0
+var _log_file_path: String = "user://world_init_log.txt"
+var _log_file: FileAccess = null
+var _stage_timings: Dictionary = {}
 
 # =============================================================================
 # INITIALIZATION
@@ -99,6 +104,7 @@ func start_initialization(target_spawn_position: Vector3) -> void:
 	is_initializing = true
 	
 	print("[WorldInitManager] Starting world initialization at spawn: %s" % spawn_position)
+	_log_to_file("[color=cyan][WorldInitManager] Initialization requested at %s[/color]" % spawn_position)
 	initialization_started.emit()
 	
 	_begin_initialization()
@@ -167,7 +173,8 @@ func get_max_attempts() -> int:
 
 func _begin_initialization() -> void:
 	current_attempt += 1
-	print("[WorldInitManager] Initialization attempt %d/%d" % [current_attempt, MAX_RETRY_ATTEMPTS])
+	_log_to_file("[color=cyan][WorldInitManager] === Initialization Started (Attempt %d/%d) ===[/color]" % [current_attempt, MAX_RETRY_ATTEMPTS])
+	_stage_timings["total_start"] = Time.get_ticks_msec()
 	
 	# Find required nodes
 	if not _find_required_nodes():
@@ -212,9 +219,10 @@ func _stage_generate_map() -> void:
 	current_stage = InitStage.GENERATING_MAP
 	_stage_progress = 0.0
 	_stage_start_time = Time.get_ticks_msec() / 1000.0
+	_stage_timings["Generating Map_start"] = Time.get_ticks_msec()
 	stage_completed.emit("Generating World Map", 0.0)
 	
-	print("[WorldInitManager] Stage: Generating Map")
+	_log_to_file("[color=cyan][WorldInitManager] Stage: Generating Map - Starting[/color]")
 	
 	if _map_generator:
 		# Check if map already exists
@@ -237,7 +245,8 @@ func _stage_generate_map() -> void:
 
 
 func _on_map_generated(seed_value: int) -> void:
-	print("[WorldInitManager] Map generated with seed: %d" % seed_value)
+	var duration := Time.get_ticks_msec() - _stage_timings.get("Generating Map_start", Time.get_ticks_msec())
+	_log_to_file("[color=green][WorldInitManager] Stage: Generating Map - Complete (%.2fs) Seed=%d[/color]" % [duration / 1000.0, seed_value])
 	_stage_progress = 1.0
 	stage_completed.emit("Generating World Map", 1.0)
 	_stage_load_biomes()
@@ -247,9 +256,10 @@ func _stage_load_biomes() -> void:
 	current_stage = InitStage.LOADING_BIOMES
 	_stage_progress = 0.0
 	_stage_start_time = Time.get_ticks_msec() / 1000.0
+	_stage_timings["Loading Biomes_start"] = Time.get_ticks_msec()
 	stage_completed.emit("Loading Biomes", 0.0)
 	
-	print("[WorldInitManager] Stage: Loading Biomes")
+	_log_to_file("[color=cyan][WorldInitManager] Stage: Loading Biomes - Starting[/color]")
 	
 	# Reload biome generator with new map
 	if _biome_generator:
@@ -284,6 +294,8 @@ func _stage_load_biomes() -> void:
 	
 	_stage_progress = 1.0
 	stage_completed.emit("Loading Biomes", 1.0)
+	var duration := Time.get_ticks_msec() - _stage_timings.get("Loading Biomes_start", Time.get_ticks_msec())
+	_log_to_file("[color=green][WorldInitManager] Stage: Loading Biomes - Complete (%.2fs)[/color]" % [duration / 1000.0])
 	
 	# Short delay to let terrain system process
 	await get_tree().create_timer(0.1).timeout
@@ -294,9 +306,10 @@ func _stage_prewarm_terrain() -> void:
 	current_stage = InitStage.PREWARMING_TERRAIN
 	_stage_progress = 0.0
 	_stage_start_time = Time.get_ticks_msec() / 1000.0
+	_stage_timings["Prewarming Terrain_start"] = Time.get_ticks_msec()
 	stage_completed.emit("Warming Terrain", 0.0)
 	
-	print("[WorldInitManager] Stage: Prewarming Terrain around spawn")
+	_log_to_file("[color=cyan][WorldInitManager] Stage: Prewarming Terrain around spawn - Starting[/color]")
 	
 	# Build list of chunks to prewarm
 	_chunks_to_prewarm.clear()
@@ -321,20 +334,52 @@ func _stage_prewarm_terrain() -> void:
 	
 	print("[WorldInitManager] Prewarming %d chunks" % _chunks_to_prewarm.size())
 	
-	# Use TerrainPrewarmer to force chunk generation
+	# Track chunk generation via generator signal
+	if _terrain and _terrain.generator and _terrain.generator.has_signal("chunk_generated"):
+		if not _terrain.generator.is_connected("chunk_generated", _on_chunk_generated):
+			_terrain.generator.chunk_generated.connect(_on_chunk_generated)
+	
+	_chunks_generated.clear()
+	_chunks_pending = _chunks_to_prewarm.size()
+	
+	# Trigger chunk generation by moving player/viewer to spawn
+	if _player:
+		_player.global_position = spawn_position
+	
 	if _terrain:
 		TerrainPrewarmer.prewarm_area_async(_terrain, spawn_position, PREWARM_RADIUS_CHUNKS, _on_prewarm_progress, _on_prewarm_complete)
 	else:
 		_on_prewarm_complete()
 
+	# Safety timeout
+	var timeout_timer := get_tree().create_timer(STAGE_TIMEOUT_SECONDS)
+	timeout_timer.timeout.connect(func():
+		if _chunks_pending > 0:
+			push_warning("[WorldInitManager] Chunk generation timeout - %d chunks pending" % _chunks_pending)
+			_on_prewarm_complete()
+	)
+
+
+func _on_chunk_generated(origin: Vector3i, biome_id: int) -> void:
+	if origin in _chunks_to_prewarm:
+		_chunks_generated[origin] = true
+		_chunks_pending -= 1
+		var progress := float(_chunks_generated.size()) / float(_chunks_to_prewarm.size())
+		_on_prewarm_progress(progress)
+		if _chunks_pending <= 0:
+			_on_prewarm_complete()
+	_log_to_file("[color=cyan][WorldInitManager] Chunk generated: %s (biome %d) - %d/%d complete[/color]" % [origin, biome_id, _chunks_generated.size(), _chunks_to_prewarm.size()])
+
 
 func _on_prewarm_progress(progress: float) -> void:
 	_stage_progress = progress
 	stage_completed.emit("Warming Terrain", progress)
+	_log_to_file("[color=cyan][WorldInitManager] Chunk prewarm progress: %.0f%%[/color]" % (progress * 100.0))
 
 
 func _on_prewarm_complete() -> void:
-	print("[WorldInitManager] Terrain prewarming complete")
+	var duration := Time.get_ticks_msec() - _stage_timings.get("Prewarming Terrain_start", Time.get_ticks_msec())
+	_log_to_file("[color=green][WorldInitManager] Stage: Prewarming Terrain - Complete (%.2fs)[/color]" % [duration / 1000.0])
 	_stage_progress = 1.0
 	stage_completed.emit("Warming Terrain", 1.0)
 	_prewarm_complete = true
@@ -345,12 +390,18 @@ func _stage_spawn_vegetation() -> void:
 	current_stage = InitStage.SPAWNING_VEGETATION
 	_stage_progress = 0.0
 	_stage_start_time = Time.get_ticks_msec() / 1000.0
+	_stage_timings["Spawning Vegetation_start"] = Time.get_ticks_msec()
 	stage_completed.emit("Spawning Vegetation", 0.0)
 	
-	print("[WorldInitManager] Stage: Spawning Vegetation")
+	_log_to_file("[color=cyan][WorldInitManager] Stage: Spawning Vegetation - Starting[/color]")
+	
+	# Verify terrain readiness
+	var chunks_ready := _chunks_generated.size()
+	if chunks_ready < _chunks_to_prewarm.size() * 0.8:
+		push_warning("[WorldInitManager] Only %d/%d chunks ready for vegetation" % [chunks_ready, _chunks_to_prewarm.size()])
 	
 	# Vegetation spawns automatically via chunk_generated signals
-	# Wait for vegetation instancer to process chunks
+	# Trigger vegetation instancer refresh
 	if _vegetation_instancer and _vegetation_instancer.has_method("reload_vegetation"):
 		_vegetation_instancer.call("reload_vegetation")
 	
@@ -381,9 +432,10 @@ func _stage_validate() -> void:
 	current_stage = InitStage.VALIDATING
 	_stage_progress = 0.0
 	_stage_start_time = Time.get_ticks_msec() / 1000.0
+	_stage_timings["Validating World_start"] = Time.get_ticks_msec()
 	stage_completed.emit("Validating World", 0.0)
 	
-	print("[WorldInitManager] Stage: Validating World")
+	_log_to_file("[color=cyan][WorldInitManager] Stage: Validating World - Starting[/color]")
 	
 	var terrain_valid := _validate_terrain()
 	_stage_progress = 0.5
@@ -412,15 +464,24 @@ func _complete_initialization() -> void:
 	var safe_spawn := _find_safe_spawn_position()
 	spawn_position = safe_spawn
 	
-	print("[WorldInitManager] Initialization complete! Safe spawn: %s" % spawn_position)
+	var total_time := Time.get_ticks_msec() - _stage_timings.get("total_start", Time.get_ticks_msec())
+	_log_to_file("[color=green][WorldInitManager] === Initialization Complete (%.2fs) ===[/color]" % [total_time / 1000.0])
+	for key in _stage_timings.keys():
+		if key.ends_with("_start"):
+			var label := key.replace("_start", "")
+			var duration := Time.get_ticks_msec() - _stage_timings.get(key, Time.get_ticks_msec())
+			_log_to_file("[color=green][WorldInitManager] Stage Summary: %s (%.2fs)[/color]" % [label, duration / 1000.0])
+	_log_to_file("[color=green][WorldInitManager] Safe spawn: %s[/color]" % spawn_position)
+	_close_log_file()
 	initialization_complete.emit()
 
 
 func _handle_stage_failure(reason: String) -> void:
-	print("[WorldInitManager] Stage failed: %s" % reason)
+	_log_to_file("[color=red][WorldInitManager] Stage Failed: %s[/color]" % reason)
+	_log_to_file("[color=yellow]Stack trace: %s[/color]" % str(get_stack()))
 	
 	if current_attempt < MAX_RETRY_ATTEMPTS:
-		print("[WorldInitManager] Retrying initialization...")
+		_log_to_file("[color=yellow][WorldInitManager] Retrying initialization...[/color]")
 		
 		# Clear caches and retry with seed offset
 		_clear_caches()
@@ -432,6 +493,8 @@ func _handle_stage_failure(reason: String) -> void:
 		current_stage = InitStage.FAILED
 		is_initializing = false
 		push_error("[WorldInitManager] Initialization failed after %d attempts: %s" % [MAX_RETRY_ATTEMPTS, reason])
+		_log_to_file("[color=red][WorldInitManager] Initialization failed after %d attempts: %s[/color]" % [MAX_RETRY_ATTEMPTS, reason])
+		_close_log_file()
 		initialization_failed.emit(reason)
 
 
@@ -486,6 +549,7 @@ func _validate_terrain() -> bool:
 		# Don't fail on this - single biome spawn is okay
 	
 	print("[WorldInitManager] Terrain validation passed (biomes found: %d)" % biomes_found.size())
+	_log_to_file("[color=green][WorldInitManager] Terrain validation passed (biomes found: %d)[/color]" % biomes_found.size())
 	return true
 
 
@@ -496,7 +560,7 @@ func _validate_vegetation() -> bool:
 		push_warning("[WorldInitManager] Validation warning: Only %d vegetation instances (expected %d+)" % [total, MIN_VEGETATION_COUNT])
 		# Don't fail on low vegetation - it might be a desert biome
 	
-	print("[WorldInitManager] Vegetation validation passed (count: %d)" % total)
+	_log_to_file("[color=green][WorldInitManager] Vegetation validation passed (count: %d)[/color]" % total)
 	return true
 
 
@@ -550,3 +614,21 @@ func _find_safe_spawn_position() -> Vector3:
 	
 	# Fallback to original position with safe Y
 	return Vector3(spawn_position.x, 80.0, spawn_position.z)
+
+
+func _log_to_file(message: String) -> void:
+	if _log_file == null:
+		_log_file = FileAccess.open(_log_file_path, FileAccess.WRITE_READ)
+		if _log_file:
+			_log_file.seek_end()
+	if _log_file:
+		var ts := Time.get_datetime_string_from_system(true, true)
+		_log_file.store_line("%s | %s" % [ts, message])
+		_log_file.flush()
+	print_rich(message)
+
+
+func _close_log_file() -> void:
+	if _log_file:
+		_log_file.close()
+		_log_file = null

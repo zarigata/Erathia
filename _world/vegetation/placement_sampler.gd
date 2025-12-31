@@ -43,6 +43,9 @@ const MIN_DISTANCE: Dictionary = {
 var _placement_noise: FastNoiseLite
 var _variation_noise: FastNoiseLite
 var _world_seed: int = 12345
+var _gpu_dispatcher: GPUVegetationDispatcher
+var _terrain_dispatcher: BiomeMapGPUDispatcher
+var _use_gpu: bool = true
 
 # =============================================================================
 # INITIALIZATION
@@ -60,6 +63,27 @@ func _init(seed_value: int = 12345) -> void:
 	_variation_noise.seed = seed_value + 1000
 	_variation_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_variation_noise.frequency = 0.5
+	
+	_gpu_dispatcher = GPUVegetationDispatcher.new()
+	_use_gpu = _gpu_dispatcher.is_ready()
+
+
+func set_terrain_dispatcher(dispatcher: BiomeMapGPUDispatcher) -> void:
+	"""Provide reference to terrain GPU dispatcher for SDF texture access."""
+	_terrain_dispatcher = dispatcher
+	if _gpu_dispatcher:
+		_gpu_dispatcher.set_terrain_dispatcher(dispatcher)
+
+
+func is_using_gpu() -> bool:
+	"""Returns true if GPU dispatcher is active and ready."""
+	return _use_gpu and _gpu_dispatcher != null and _gpu_dispatcher.is_ready() and _terrain_dispatcher != null
+
+
+func force_cpu_mode() -> void:
+	"""Disable GPU and use CPU fallback."""
+	_use_gpu = false
+	print("[PlacementSampler] Forced to CPU mode")
 
 
 # =============================================================================
@@ -77,20 +101,13 @@ func sample_chunk(
 ) -> Array[Dictionary]:
 	var placements: Array[Dictionary] = []
 	var veg_types: Array = rules.get("types", [])
-	var slope_max: float = rules.get("slope_max", 45.0)
-	var height_range: Dictionary = rules.get("height_range", {"min": -100, "max": 500})
+	var slope_max: float = rules.get("slope_max", 30.0)
+	var height_range: Dictionary = rules.get("height_range", {"min": -50, "max": 200})
 	
 	if veg_types.is_empty():
 		return placements
-	
-	# Get VoxelTool for terrain queries
-	var voxel_tool: VoxelTool = null
-	if terrain and terrain.has_method("get_voxel_tool"):
-		voxel_tool = terrain.get_voxel_tool()
-	
-	if voxel_tool == null:
-		push_warning("[PlacementSampler] No VoxelTool available for chunk %s" % chunk_origin)
-		return placements
+
+	var gpu_available := is_using_gpu()
 	
 	# Process each vegetation type
 	for veg_type_data: Dictionary in veg_types:
@@ -105,26 +122,73 @@ func sample_chunk(
 		var noise_freq: float = NOISE_FREQUENCY.get(veg_type, 0.1)
 		var min_dist: float = MIN_DISTANCE.get(veg_type, 1.0)
 		
-		# Configure noise for this type
-		_placement_noise.frequency = noise_freq
-		_placement_noise.seed = _world_seed + veg_type * 1000
-		
-		# Sample grid within chunk
-		var type_placements := _sample_grid_for_type(
-			chunk_origin,
-			chunk_size,
-			veg_type,
-			density,
-			grid_spacing,
-			min_dist,
-			variants,
-			slope_max,
-			height_range,
-			voxel_tool,
-			biome_id
-		)
-		
-		placements.append_array(type_placements)
+		if gpu_available:
+			var gpu_results := _gpu_dispatcher.generate_placements(
+				chunk_origin,
+				veg_type,
+				density,
+				grid_spacing,
+				noise_freq,
+				slope_max,
+				height_range,
+				_world_seed,
+				_terrain_dispatcher.get_biome_map_texture()
+			)
+			
+			var placed_gpu_positions: Array[Vector3] = []
+			for gpu_data: Dictionary in gpu_results:
+				var surface_pos: Vector3 = gpu_data.get("position", Vector3.ZERO)
+				
+				var too_close := false
+				for existing_pos: Vector3 in placed_gpu_positions:
+					if existing_pos.distance_to(surface_pos) < min_dist:
+						too_close = true
+						break
+				
+				if too_close:
+					continue
+				
+				if VegetationManager.has_vegetation_near(surface_pos, min_dist * 0.5):
+					continue
+				
+				var placement_dict := _convert_gpu_placement_to_dict(
+					gpu_data,
+					veg_type,
+					variants,
+					biome_id
+				)
+				if not placement_dict.is_empty():
+					placements.append(placement_dict)
+					placed_gpu_positions.append(surface_pos)
+		else:
+			# CPU fallback path
+			var voxel_tool: VoxelTool = null
+			if terrain and terrain.has_method("get_voxel_tool"):
+				voxel_tool = terrain.get_voxel_tool()
+			
+			if voxel_tool == null:
+				push_warning("[PlacementSampler] No VoxelTool available for chunk %s" % chunk_origin)
+				return placements
+			
+			# Configure noise for this type
+			_placement_noise.frequency = noise_freq
+			_placement_noise.seed = _world_seed + veg_type * 1000
+			
+			var type_placements := _sample_grid_for_type(
+				chunk_origin,
+				chunk_size,
+				veg_type,
+				density,
+				grid_spacing,
+				min_dist,
+				variants,
+				slope_max,
+				height_range,
+				voxel_tool,
+				biome_id
+			)
+			
+			placements.append_array(type_placements)
 	
 	return placements
 
@@ -305,6 +369,71 @@ func _generate_transform(position: Vector3, normal: Vector3, veg_type: int) -> T
 				transform = transform.rotated(tilt_axis, tilt_angle)
 	
 	return transform
+
+
+func _generate_transform_from_gpu_data(
+	position: Vector3,
+	normal: Vector3,
+	rotation_y: float,
+	scale: float,
+	veg_type: int
+) -> Transform3D:
+	var transform := Transform3D.IDENTITY
+	transform.origin = position
+	transform = transform.rotated(Vector3.UP, rotation_y)
+	transform = transform.scaled(Vector3.ONE * scale)
+	
+	if veg_type != VegetationManager.VegetationType.TREE:
+		if normal != Vector3.UP and normal.y > 0.7:
+			var tilt_axis := Vector3.UP.cross(normal).normalized()
+			var tilt_angle := acos(clampf(normal.y, -1.0, 1.0)) * 0.3
+			if tilt_axis.length() > 0.01:
+				transform = transform.rotated(tilt_axis, tilt_angle)
+	
+	return transform
+
+
+func _convert_gpu_placement_to_dict(
+	gpu_data: Dictionary,
+	veg_type: int,
+	variants: Array,
+	biome_id: int
+) -> Dictionary:
+	"""Map GPU placement payload to CPU placement dictionary structure."""
+	# Convert GPU placement payload into the dictionary shape expected by CPU consumers.
+	if gpu_data.is_empty():
+		return {}
+	
+	var position: Vector3 = gpu_data.get("position", Vector3.ZERO)
+	var normal: Vector3 = gpu_data.get("normal", Vector3.UP)
+	var rotation_y: float = gpu_data.get("rotation_y", 0.0)
+	var scale: float = gpu_data.get("scale", 1.0)
+	var variant_index: int = gpu_data.get("variant_index", 0)
+	var instance_seed: int = gpu_data.get("instance_seed", 0)
+	
+	if variants.is_empty():
+		return {}
+	
+	var safe_variant_index: int = clampi(variant_index, 0, variants.size() - 1)
+	var variant: String = variants[safe_variant_index]
+	
+	var transform := _generate_transform_from_gpu_data(
+		position,
+		normal,
+		rotation_y,
+		scale,
+		veg_type
+	)
+	
+	return {
+		"position": position,
+		"normal": normal,
+		"transform": transform,
+		"type": veg_type,
+		"variant": variant,
+		"biome_id": biome_id,
+		"seed": instance_seed
+	}
 
 
 func _estimate_normal(voxel_tool: VoxelTool, position: Vector3) -> Vector3:

@@ -7,6 +7,10 @@ signal chunk_generated(origin: Vector3i, biome_id: int)
 var _gpu_dispatcher: BiomeMapGPUDispatcher
 var _world_seed: int = 0
 var _biome_map_image: Image
+var _last_generation_time_us: int = 0
+var _chunks_generated: int = 0
+var _total_generation_time_us: int = 0
+var debug_logging: bool = false
 
 const MAT_AIR: int = 0
 const MAT_DIRT: int = 1
@@ -25,7 +29,20 @@ func _init() -> void:
 
 
 func is_gpu_available() -> bool:
-	return _gpu_dispatcher != null and _gpu_dispatcher.is_ready()
+	if not _gpu_dispatcher:
+		print_rich("[color=red][GPUTerrainGenerator] GPU dispatcher is null[/color]")
+		return false
+	if not _gpu_dispatcher.is_ready():
+		print_rich("[color=red][GPUTerrainGenerator] GPU dispatcher not ready (check shader compilation)[/color]")
+		return false
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		print_rich("[color=red][GPUTerrainGenerator] RenderingDevice unavailable[/color]")
+		return false
+	if rd.get_device_name() == "":
+		print_rich("[color=red][GPUTerrainGenerator] GPU device name empty (driver issue?)[/color]")
+		return false
+	return true
 
 
 func _load_biome_map() -> void:
@@ -41,10 +58,27 @@ func _load_biome_map() -> void:
 		push_warning("[GPUTerrainGenerator] Biome map not found; GPU generation disabled")
 
 
+func update_biome_texture(image: Image) -> void:
+	## Update the GPU biome map texture and cache the image for sampling.
+	## Ensures GPU dispatcher receives latest biome map produced by BiomeMapGeneratorGPU.
+	if image == null:
+		push_warning("[GPUTerrainGenerator] update_biome_texture called with null image")
+		return
+	
+	_biome_map_image = image
+	if _gpu_dispatcher:
+		_gpu_dispatcher.set_biome_map_texture(image)
+
+
 func update_seed(new_seed: int) -> void:
 	_world_seed = new_seed
 	if _gpu_dispatcher:
 		_gpu_dispatcher.clear_cache()
+
+
+func get_gpu_dispatcher() -> BiomeMapGPUDispatcher:
+	"""Expose the internal GPU dispatcher for consumers needing GPU SDF textures."""
+	return _gpu_dispatcher
 
 
 func _get_used_channels_mask() -> int:
@@ -55,38 +89,36 @@ func _generate_block(out_buffer: VoxelBuffer, origin: Vector3i, lod: int) -> voi
 	if not is_gpu_available():
 		return
 	
-	var block_size := out_buffer.get_size()
-	var sdf_texture := _gpu_dispatcher.generate_chunk_sdf(origin, _world_seed)
-	if not sdf_texture.is_valid():
-		push_error("[GPUTerrainGenerator] Failed to generate SDF texture for chunk %s" % origin)
+	if debug_logging:
+		print_rich("[color=cyan][GPUTerrainGenerator] Generating chunk at %s (LOD %d)[/color]" % [origin, lod])
+	var start_time := Time.get_ticks_usec()
+	var textures := _gpu_dispatcher.generate_chunk_sdf(origin, _world_seed)
+	if textures.is_empty() or not textures.has("sdf") or not textures.has("material"):
+		print_rich("[color=red][GPUTerrainGenerator] Texture generation failed for chunk %s[/color]" % origin)
+		push_error("[GPUTerrainGenerator] Failed to generate textures for chunk %s" % origin)
 		return
+
+	var max_wait := 100
+	var waited := 0
+	while not _gpu_dispatcher.is_chunk_ready(origin) and waited < max_wait:
+		OS.delay_msec(1)
+		waited += 1
 	
-	var sdf_data := _gpu_dispatcher.read_sdf_bulk(sdf_texture)
-	if sdf_data.is_empty():
-		push_error("[GPUTerrainGenerator] Empty SDF data for chunk %s" % origin)
+	if waited >= max_wait and debug_logging:
+		print_rich("[color=yellow][GPUTerrainGenerator] Chunk %s generation timeout after %dms[/color]" % [origin, max_wait])
+	if not _gpu_dispatcher.write_to_voxel_buffer(origin, out_buffer):
+		push_error("[GPUTerrainGenerator] Failed to write chunk %s to VoxelBuffer" % origin)
 		return
-	
-	for z in range(block_size.z):
-		for y in range(block_size.y):
-			for x in range(block_size.x):
-				var index := (z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x) * 4
-				var sdf := sdf_data.decode_float(index)
-				
-				out_buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer.CHANNEL_SDF)
-				
-				var material_id := MAT_STONE if sdf < 0.0 else MAT_AIR
-				if sdf > -4.0 and sdf < 0.0:
-					material_id = MAT_DIRT
-				elif sdf <= -10.0:
-					var ore_noise := randf()
-					if ore_noise > 0.98:
-						material_id = MAT_IRON_ORE
-				
-				out_buffer.set_voxel(material_id, x, y, z, VoxelBuffer.CHANNEL_INDICES)
 	
 	if lod == 0:
 		var biome_id := _sample_biome_at_chunk(origin)
 		chunk_generated.emit(origin, biome_id)
+	
+	_last_generation_time_us = Time.get_ticks_usec() - start_time
+	_total_generation_time_us += _last_generation_time_us
+	_chunks_generated += 1
+	if debug_logging:
+		print_rich("[color=green][GPUTerrainGenerator] Chunk %s generated in %.2fms[/color]" % [origin, _last_generation_time_us / 1000.0])
 
 
 func _sample_biome_at_chunk(origin: Vector3i) -> int:
@@ -101,3 +133,31 @@ func _sample_biome_at_chunk(origin: Vector3i) -> int:
 	pixel_y = clampi(pixel_y, 0, _biome_map_image.get_height() - 1)
 	
 	return int(_biome_map_image.get_pixel(pixel_x, pixel_y).r8)
+
+
+func get_last_generation_time_ms() -> float:
+	return _last_generation_time_us / 1000.0
+
+
+func get_chunks_generated() -> int:
+	return _chunks_generated
+
+
+func get_average_generation_time_ms() -> float:
+	if _chunks_generated == 0:
+		return 0.0
+	return float(_total_generation_time_us) / float(_chunks_generated) / 1000.0
+
+
+func has_biome_texture() -> bool:
+	return _biome_map_image != null
+
+
+func get_gpu_status() -> Dictionary:
+	return {
+		"available": is_gpu_available(),
+		"dispatcher_ready": _gpu_dispatcher != null and _gpu_dispatcher.is_ready(),
+		"chunks_generated": _chunks_generated,
+		"avg_time_ms": get_average_generation_time_ms(),
+		"last_time_ms": get_last_generation_time_ms()
+	}

@@ -57,20 +57,24 @@ var _terrain_ready_chunks: Dictionary = {}  # Vector3i -> bool (chunks with LOD0
 var _deferred_chunks: Array[Vector3i] = []  # Chunks waiting for terrain to be ready
 var _chunk_biomes: Dictionary[Vector3i, int] = {}  # Vector3i -> biome_id captured from chunk_generated
 var _origin_fix_reloaded: bool = false
+var _last_chunk_process_time_us: int = 0
+var _total_chunks_processed: int = 0
+var _total_chunk_time_us: int = 0
 
 # Player reference for streaming
 var _player: Node3D
 
 # Processing state
 var _is_processing: bool = false
-var _chunks_per_frame: int = 2  # Lower to reduce per-frame load and FPS spikes
+var _chunks_per_frame: int = 1  # Process one chunk per frame to minimize spikes
 var _chunk_log_budget: int = 10  # limit noisy chunk_generated logging to reduce FPS impact
 
 var _connection_verified: bool = false
 var _connection_attempts: int = 0
 var _debug_last_placements: Dictionary = {}
 var _biome_query_counts: Dictionary = {}
-var _last_connection_status: Dictionary = {}
+var _terrain_dispatcher_wired: bool = false
+var _terrain_dispatcher: BiomeMapGPUDispatcher
 
 # =============================================================================
 # INITIALIZATION
@@ -92,6 +96,7 @@ func _ready() -> void:
 	if seed_manager:
 		seed_value = seed_manager.get_world_seed()
 	_placement_sampler = PlacementSampler.new(seed_value)
+	_ensure_terrain_dispatcher()
 	
 	# Setup MultiMesh instances
 	_setup_multimesh_instances()
@@ -132,11 +137,11 @@ func _setup_multimesh_instances() -> void:
 		var rules: Dictionary = VegetationManager.BIOME_VEGETATION_RULES[biome_id]
 		var types_array: Array = rules.get("types", [])
 		for type_data: Dictionary in types_array:
-			var veg_type: int = type_data.get("type", 0)
+			var type_id: int = type_data.get("type", 0)
 			var variants: Array = type_data.get("variants", ["default"])
 			for variant: String in variants:
-				if variant not in type_variants[veg_type]:
-					type_variants[veg_type].append(variant)
+				if variant not in type_variants[type_id]:
+					type_variants[type_id].append(variant)
 	
 	# Ensure each type has at least a "default" variant
 	for veg_type in type_variants.keys():
@@ -146,11 +151,11 @@ func _setup_multimesh_instances() -> void:
 	# Create MultiMeshInstance3D for each type+variant combination
 	for veg_type in VegetationManager.VegetationType.values():
 		var variants: Array = type_variants[veg_type]
-		var instance_count_per_variant := _get_max_instances_for_type(veg_type) / maxi(variants.size(), 1)
+		var instance_count_per_variant: int = int(_get_max_instances_for_type(veg_type) / maxi(variants.size(), 1))
 		
-		for variant: String in variants:
+		for variant_name: String in variants:
 			var mmi := MultiMeshInstance3D.new()
-			mmi.name = "VegetationMM_%d_%s" % [veg_type, variant]
+			mmi.name = "VegetationMM_%d_%s" % [veg_type, variant_name]
 			
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -174,7 +179,7 @@ func _setup_multimesh_instances() -> void:
 			mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			
 			add_child(mmi)
-			_multimesh_instances[veg_type][variant] = mmi
+			_multimesh_instances[veg_type][variant_name] = mmi
 
 
 func _get_max_instances_for_type(veg_type: int) -> int:
@@ -216,6 +221,8 @@ func _connect_terrain_signals() -> void:
 			print("[VegetationInstancer] Terrain has no generator yet; will retry")
 		return
 	
+	_ensure_terrain_dispatcher()
+	
 	if not generator.has_signal("chunk_generated"):
 		push_warning("[VegetationInstancer] Generator has no chunk_generated signal, using polling fallback")
 		return
@@ -245,6 +252,7 @@ func _verify_signal_connection() -> bool:
 		if debug_logging:
 			print("[VegetationInstancer] _verify_signal_connection: terrain/generator missing")
 		return false
+	_ensure_terrain_dispatcher()
 	var generator := _terrain.generator
 	var connected := generator.is_connected("chunk_generated", Callable(self, "_on_chunk_generated"))
 	if debug_logging:
@@ -294,19 +302,21 @@ func _update_streaming() -> void:
 	
 	# Unload distant chunks
 	var chunks_to_unload: Array[Vector3i] = []
-	for chunk_origin: Vector3i in _populated_chunks.keys():
-		var chunk_center := Vector3(chunk_origin.x + CHUNK_SIZE * 0.5, player_pos.y, chunk_origin.z + CHUNK_SIZE * 0.5)
+	for populated_chunk: Vector3i in _populated_chunks.keys():
+		var chunk_center := Vector3(populated_chunk.x + CHUNK_SIZE * 0.5, player_pos.y, populated_chunk.z + CHUNK_SIZE * 0.5)
 		var distance := chunk_center.distance_to(player_pos)
 		if distance > (streaming_radius + 2) * CHUNK_SIZE:
-			chunks_to_unload.append(chunk_origin)
+			chunks_to_unload.append(populated_chunk)
 	
-	for chunk_origin in chunks_to_unload:
-		_unload_chunk(chunk_origin)
+	for chunk_to_unload in chunks_to_unload:
+		_unload_chunk(chunk_to_unload)
 
 
 func _process_pending_chunks() -> void:
 	if _pending_chunks.is_empty() or _is_processing:
 		return
+	
+	_ensure_terrain_dispatcher()
 	
 	_is_processing = true
 	
@@ -370,6 +380,7 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 			push_warning("[VegetationInstancer] Biome id null for chunk %s" % chunk_origin)
 		return
 	
+	var start_time := Time.get_ticks_usec()
 	# Debug logging
 	if debug_logging:
 		print("[VegetationInstancer] Populating chunk: origin=%s, biome_id=%d" % [chunk_origin, biome_id])
@@ -382,6 +393,7 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 		return
 	
 	# Sample placements
+	_ensure_terrain_dispatcher()
 	var placements := _placement_sampler.sample_chunk(
 		chunk_origin,
 		CHUNK_SIZE,
@@ -412,6 +424,9 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 		_add_instance(placement, chunk_origin)
 	
 	_populated_chunks[chunk_origin] = true
+	_last_chunk_process_time_us = Time.get_ticks_usec() - start_time
+	_total_chunks_processed += 1
+	_total_chunk_time_us += _last_chunk_process_time_us
 	
 	if placements.size() > 0:
 		VegetationManager.vegetation_populated.emit(chunk_origin, placements.size())
@@ -468,9 +483,24 @@ func _unload_chunk(chunk_origin: Vector3i) -> void:
 	_populated_chunks.erase(chunk_origin)
 	_terrain_ready_chunks.erase(chunk_origin)
 	_chunk_biomes.erase(chunk_origin)
-	
-	# Also clear from VegetationManager
-	VegetationManager.unload_chunk(chunk_origin)
+
+
+func get_last_chunk_time_ms() -> float:
+	return _last_chunk_process_time_us / 1000.0
+
+
+func get_average_chunk_time_ms() -> float:
+	if _total_chunks_processed == 0:
+		return 0.0
+	return float(_total_chunk_time_us) / float(_total_chunks_processed) / 1000.0
+
+
+func get_gpu_dispatcher() -> GPUVegetationDispatcher:
+	if _placement_sampler and _placement_sampler.has_method("get_gpu_dispatcher"):
+		return _placement_sampler.get_gpu_dispatcher()
+	if debug_logging:
+		push_warning("[VegetationInstancer] GPU dispatcher unavailable: placement_sampler=%s" % str(_placement_sampler != null))
+	return null
 
 
 func _rebuild_multimesh_excluding_indices(veg_type: int, variant: String, indices_to_remove: Array, removed_chunk: Vector3i) -> void:
@@ -506,11 +536,11 @@ func _rebuild_multimesh_excluding_indices(veg_type: int, variant: String, indice
 	mm.visible_instance_count = kept_transforms.size()
 	
 	# Update indices in _chunk_instance_indices for all OTHER chunks
-	for chunk_origin: Vector3i in _chunk_instance_indices.keys():
-		if chunk_origin == removed_chunk:
+	for other_chunk: Vector3i in _chunk_instance_indices.keys():
+		if other_chunk == removed_chunk:
 			continue
 		
-		var chunk_instances: Array = _chunk_instance_indices[chunk_origin]
+		var chunk_instances: Array = _chunk_instance_indices[other_chunk]
 		for instance_data: Dictionary in chunk_instances:
 			if instance_data.get("type") == veg_type and instance_data.get("variant") == variant:
 				var old_idx: int = instance_data.get("index", -1)
@@ -852,3 +882,31 @@ func set_enabled(value: bool) -> void:
 			var mmi: MultiMeshInstance3D = type_variants[variant]
 			if mmi:
 				mmi.visible = value
+
+
+func _ensure_terrain_dispatcher() -> void:
+	if _terrain_dispatcher_wired:
+		return
+	if not _placement_sampler:
+		if debug_logging:
+			push_warning("[VegetationInstancer] Cannot wire dispatcher: _placement_sampler is null")
+		return
+	if not _terrain or not _terrain.generator:
+		if debug_logging:
+			push_warning("[VegetationInstancer] Cannot wire dispatcher: terrain=%s generator=%s" % [str(_terrain != null), str(_terrain.generator if _terrain else "N/A")])
+		return
+	var generator := _terrain.generator
+	if not generator.has_method("get_gpu_dispatcher"):
+		if debug_logging:
+			push_warning("[VegetationInstancer] Generator %s does not support GPU dispatcher" % generator.get_class())
+		return
+	var dispatcher: BiomeMapGPUDispatcher = generator.get_gpu_dispatcher()
+	if dispatcher:
+		_terrain_dispatcher = dispatcher
+		_placement_sampler.set_terrain_dispatcher(dispatcher)
+		_terrain_dispatcher_wired = true
+		if debug_logging:
+			print("[VegetationInstancer] ✓ GPU dispatcher wired successfully")
+	else:
+		if debug_logging:
+			push_warning("[VegetationInstancer] Generator returned null GPU dispatcher")

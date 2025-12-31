@@ -7,8 +7,11 @@ class_name TerrainPrewarmer
 
 const CHUNK_SIZE: int = 32
 
+## DEPRECATED: Use signal-based chunk tracking instead.
+## This function forces synchronous generation and blocks the main thread.
 ## Prewarm terrain chunks synchronously (blocking)
 static func prewarm_area(terrain: VoxelLodTerrain, center: Vector3, radius_chunks: int) -> void:
+	push_warning("[TerrainPrewarmer] prewarm_area() is deprecated - use signal-based tracking")
 	if not terrain:
 		push_warning("[TerrainPrewarmer] No terrain provided")
 		return
@@ -45,6 +48,11 @@ static func prewarm_area(terrain: VoxelLodTerrain, center: Vector3, radius_chunk
 	print("[TerrainPrewarmer] Prewarmed %d chunks around %s" % [chunks_warmed, center])
 
 
+static func is_chunk_generated(_terrain: VoxelLodTerrain, _chunk_origin: Vector3i) -> bool:
+	# Placeholder: chunk tracking handled in WorldInitManager
+	return false
+
+
 ## Prewarm terrain chunks asynchronously with progress callback
 static func prewarm_area_async(terrain: VoxelLodTerrain, center: Vector3, radius_chunks: int, progress_callback: Callable, complete_callback: Callable) -> void:
 	if not terrain:
@@ -52,67 +60,35 @@ static func prewarm_area_async(terrain: VoxelLodTerrain, center: Vector3, radius
 		complete_callback.call()
 		return
 	
-	var voxel_tool := terrain.get_voxel_tool()
-	if not voxel_tool:
-		push_warning("[TerrainPrewarmer] Could not get voxel tool")
+	var viewer := _get_or_create_viewer(terrain, center)
+	if not viewer:
+		push_warning("[TerrainPrewarmer] Could not create terrain viewer")
 		complete_callback.call()
 		return
+
+	# VoxelLodTerrain will generate around the viewer automatically
+	print("[TerrainPrewarmer] Viewer positioned at %s - terrain will generate automatically" % center)
+	progress_callback.call(0.0)
+
+
+static func _get_or_create_viewer(terrain: VoxelLodTerrain, position: Vector3) -> Node3D:
+	var players := terrain.get_tree().get_nodes_in_group("player")
+	if players.size() > 0:
+		var player := players[0] as Node3D
+		if player:
+			player.global_position = position
+			return player
 	
-	var center_chunk := Vector3i(
-		int(center.x / CHUNK_SIZE) * CHUNK_SIZE,
-		0,
-		int(center.z / CHUNK_SIZE) * CHUNK_SIZE
-	)
+	var viewer := Node3D.new()
+	viewer.name = "TempTerrainViewer"
+	terrain.add_child(viewer)
+	viewer.global_position = position
 	
-	# Build list of chunks to warm
-	var chunks_to_warm: Array[Vector3i] = []
-	for x in range(-radius_chunks, radius_chunks + 1):
-		for z in range(-radius_chunks, radius_chunks + 1):
-			var chunk_origin := Vector3i(
-				center_chunk.x + x * CHUNK_SIZE,
-				0,
-				center_chunk.z + z * CHUNK_SIZE
-			)
-			chunks_to_warm.append(chunk_origin)
+	if ClassDB.class_exists("VoxelViewer"):
+		var voxel_viewer = ClassDB.instantiate("VoxelViewer")
+		viewer.add_child(voxel_viewer)
 	
-	var total_chunks := chunks_to_warm.size()
-	var chunks_warmed := 0
-	
-	print("[TerrainPrewarmer] Starting async prewarm of %d chunks" % total_chunks)
-	
-	# Process chunks over multiple frames
-	var tree := terrain.get_tree()
-	if not tree:
-		# Fallback to synchronous if no tree
-		prewarm_area(terrain, center, radius_chunks)
-		complete_callback.call()
-		return
-	
-	# Create a timer to process chunks gradually
-	var chunks_per_frame := 3
-	
-	while chunks_warmed < total_chunks:
-		for _i in range(chunks_per_frame):
-			if chunks_warmed >= total_chunks:
-				break
-			
-			var chunk_origin: Vector3i = chunks_to_warm[chunks_warmed]
-			
-			# Force chunk generation by querying voxel data
-			var ray_start := Vector3(chunk_origin.x + CHUNK_SIZE * 0.5, 200.0, chunk_origin.z + CHUNK_SIZE * 0.5)
-			voxel_tool.raycast(ray_start, Vector3.DOWN, 250.0)
-			
-			chunks_warmed += 1
-		
-		# Report progress
-		var progress := float(chunks_warmed) / float(total_chunks)
-		progress_callback.call(progress)
-		
-		# Wait one frame
-		await tree.process_frame
-	
-	print("[TerrainPrewarmer] Async prewarm complete: %d chunks" % total_chunks)
-	complete_callback.call()
+	return viewer
 
 
 ## Check if terrain mesh exists at a given position

@@ -8,6 +8,8 @@ const MAX_FPS: float = 120.0
 const MIN_FPS: float = 0.0
 
 var _fps_history: Array[float] = []
+var _show_breakdown: bool = false
+var _breakdown_data: Dictionary = {}
 
 
 func _ready() -> void:
@@ -18,6 +20,7 @@ func _draw() -> void:
 	# Get FPS history from PerformanceOverlay
 	if PerformanceOverlay:
 		_fps_history = PerformanceOverlay.get_fps_history()
+		_breakdown_data = PerformanceOverlay.get_metrics().get("workload_distribution", {})
 	
 	if _fps_history.is_empty():
 		return
@@ -88,6 +91,9 @@ func _draw() -> void:
 			10,
 			_get_fps_color(min_fps)
 		)
+	
+	if _show_breakdown and PerformanceOverlay:
+		_draw_frame_breakdown()
 
 
 func _get_fps_color(fps: float) -> Color:
@@ -116,3 +122,32 @@ func _get_min() -> float:
 		if fps < min_val:
 			min_val = fps
 	return min_val
+
+
+func set_show_breakdown(enabled: bool) -> void:
+	_show_breakdown = enabled
+	queue_redraw()
+
+
+func _draw_frame_breakdown() -> void:
+	var rect := get_rect()
+	var breakdown_height := 20.0
+	var y_offset := rect.size.y - breakdown_height - 5.0
+	
+	var workload := _breakdown_data
+	var cpu_pct := workload.get("cpu", 0.33)
+	var compute_pct := workload.get("gpu_compute", 0.33)
+	var render_pct := workload.get("gpu_render", 0.34)
+	
+	var width := rect.size.x
+	var cpu_width := width * cpu_pct
+	var compute_width := width * compute_pct
+	var render_width := width * render_pct
+	
+	draw_rect(Rect2(0, y_offset, cpu_width, breakdown_height), Color(0.8, 0.3, 0.3, 0.8))
+	draw_rect(Rect2(cpu_width, y_offset, compute_width, breakdown_height), Color(0.3, 0.8, 0.3, 0.8))
+	draw_rect(Rect2(cpu_width + compute_width, y_offset, render_width, breakdown_height), Color(0.3, 0.3, 0.8, 0.8))
+	
+	draw_string(ThemeDB.fallback_font, Vector2(5, y_offset + 14), "CPU", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, Vector2(cpu_width + 5, y_offset + 14), "Compute", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, Vector2(cpu_width + compute_width + 5, y_offset + 14), "Render", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color.WHITE)

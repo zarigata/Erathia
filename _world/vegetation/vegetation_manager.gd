@@ -249,6 +249,7 @@ var _instance_spatial_hash: Dictionary = {}  # Grid cell -> Array of positions
 var debug_show_zones: bool = false
 var debug_enabled: bool = true
 var _biome_rule_queries: Dictionary = {}
+var _last_mesh_gen_time_ms: float = 0.0
 
 # Procedural generators
 var _tree_generator: RefCounted
@@ -262,7 +263,11 @@ var _stats: Dictionary = {
 	"grass_count": 0,
 	"cache_size": 0,
 	"cache_hits": 0,
-	"cache_misses": 0
+	"cache_misses": 0,
+	"last_mesh_generation_time_ms": 0.0,
+	"mesh_cache_size": 0,
+	"mesh_cache_hits": 0,
+	"mesh_cache_misses": 0
 }
 
 # =============================================================================
@@ -286,6 +291,7 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 	
 	if _mesh_cache.has(cache_key):
 		_stats["cache_hits"] += 1
+		_stats["mesh_cache_hits"] = _stats.get("mesh_cache_hits", 0) + 1
 		# Move to end of LRU
 		_mesh_cache_order.erase(cache_key)
 		_mesh_cache_order.append(cache_key)
@@ -293,9 +299,11 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 		return _mesh_cache[cache_key]
 	
 	_stats["cache_misses"] += 1
+	_stats["mesh_cache_misses"] = _stats.get("mesh_cache_misses", 0) + 1
 	_log_debug("cache-miss", {"key": cache_key, "type": type, "biome": biome_id, "variant": variant, "lod": lod_level})
 	
 	# Generate mesh
+	var start_time := Time.get_ticks_usec()
 	var mesh: Mesh = null
 	match type:
 		VegetationType.TREE:
@@ -325,6 +333,7 @@ func get_mesh_for_type(type: VegetationType, biome_id: int, variant: String, see
 			_log_debug("generator-call", {"type": "ore", "ore_size": ore_size, "seed": seed_value, "lod": lod_level, "biome": biome_id})
 			mesh = RockGenerator.generate_ore_boulder(type, seed_value, lod_level)
 	
+	_last_mesh_gen_time_ms = (Time.get_ticks_usec() - start_time) / 1000.0
 	if mesh:
 		var validation: Dictionary = _validate_mesh(mesh)
 		var validation_ok: bool = validation.get("ok", false) as bool
@@ -520,6 +529,10 @@ func unload_chunk(chunk_origin: Vector3i) -> void:
 ## Get current statistics
 func get_stats() -> Dictionary:
 	_stats["cache_size"] = _mesh_cache.size()
+	_stats["mesh_cache_size"] = _mesh_cache.size()
+	_stats["mesh_cache_hits"] = _stats.get("cache_hits", 0)
+	_stats["mesh_cache_misses"] = _stats.get("cache_misses", 0)
+	_stats["last_mesh_generation_time_ms"] = _last_mesh_gen_time_ms
 	return _stats.duplicate()
 
 

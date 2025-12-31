@@ -88,6 +88,9 @@ func _register_core_commands() -> void:
 	register_command("validate_world", _cmd_validate_world, "Run world validation checks")
 	register_command("show_biome_boundaries", _cmd_show_biome_boundaries, "Toggle biome boundary debug visualization")
 	register_command("world_status", _cmd_world_status, "Show world initialization status")
+	register_command("gpu_status", _cmd_gpu_status, "Show GPU device info and compute status")
+	register_command("profile_dump", _cmd_profile_dump, "Export current performance metrics to CSV")
+	register_command("regen_terrain", _cmd_regen_terrain, "Clear terrain cache and force regeneration without reload")
 
 
 ## Register a new command
@@ -539,6 +542,13 @@ func _get_vegetation_instancer() -> Node:
 	return null
 
 
+func _get_terrain() -> VoxelLodTerrain:
+	var root := get_tree().current_scene
+	if root:
+		return root.get_node_or_null("VoxelLodTerrain") as VoxelLodTerrain
+	return null
+
+
 func _get_vegetation_debug() -> Node:
 	var root := get_tree().current_scene
 	if root:
@@ -817,6 +827,66 @@ func _cmd_world_status(args: Array[String]) -> String:
 		lines.append("Blend Distance: %.1fm" % biome_gen.BIOME_BLEND_DISTANCE)
 	
 	return "\n".join(lines)
+
+
+func _cmd_gpu_status(args: Array[String]) -> String:
+	var lines: Array[String] = ["=== GPU Status ==="]
+	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		return "GPU: Not available (Compatibility renderer or headless mode)"
+	lines.append("Device: %s" % rd.get_device_name())
+	lines.append("Vendor: %s" % rd.get_device_vendor_name())
+	lines.append("API: %s" % rd.get_device_api_version())
+	var vram_mb := Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0
+	lines.append("VRAM Used: %.1f MB" % vram_mb)
+	var main_init := get_tree().current_scene.get_node_or_null("MainTerrainInit")
+	if main_init and main_init.has_method("get_gpu_info"):
+		var info: Dictionary = main_init.get_gpu_info()
+		lines.append("-- Terrain Init --")
+		lines.append("Generator: %s" % info.get("generator_type", "Unknown"))
+		lines.append("Compute: %s" % ("Yes" if info.get("compute_available", false) else "No"))
+		lines.append("Dispatcher Ready: %s" % ("Yes" if info.get("dispatcher_ready", false) else "No"))
+	var terrain := _get_terrain()
+	if terrain and terrain.generator and terrain.generator.has_method("get_gpu_status"):
+		var status: Dictionary = terrain.generator.get_gpu_status()
+		lines.append("-- GPU Generator --")
+		lines.append("Available: %s" % ("Yes" if status.get("available", false) else "No"))
+		lines.append("Dispatcher Ready: %s" % ("Yes" if status.get("dispatcher_ready", false) else "No"))
+		lines.append("Chunks: %d | Avg: %.2fms | Last: %.2fms" % [
+			status.get("chunks_generated", 0),
+			status.get("avg_time_ms", 0.0),
+			status.get("last_time_ms", 0.0)
+		])
+	return "\n".join(lines)
+
+
+func _cmd_profile_dump(args: Array[String]) -> String:
+	if not PerformanceOverlay:
+		return "Error: PerformanceOverlay not available"
+	PerformanceOverlay.export_metrics_now()
+	var path := PerformanceOverlay.get_csv_file_path()
+	return "Performance metrics exported to: %s" % path
+
+
+func _cmd_regen_terrain(args: Array[String]) -> String:
+	var terrain := _get_terrain()
+	if not terrain:
+		return "Error: VoxelLodTerrain not found"
+	if terrain.generator and terrain.generator is GPUTerrainGenerator and terrain.generator.has_method("get_gpu_dispatcher"):
+		var dispatcher: BiomeMapGPUDispatcher = terrain.generator.get_gpu_dispatcher()
+		if dispatcher and dispatcher.has_method("clear_cache"):
+			dispatcher.clear_cache()
+	if terrain.generator and terrain.generator.has_method("reload_world_map_and_notify"):
+		terrain.generator.reload_world_map_and_notify()
+	var was_visible := terrain.visible
+	var saved_generator := terrain.generator
+	terrain.visible = false
+	terrain.generator = null
+	await get_tree().process_frame
+	terrain.generator = saved_generator
+	terrain.visible = was_visible
+	await get_tree().process_frame
+	return "Terrain cache cleared and regeneration triggered"
 
 
 func _get_biome_generator() -> BiomeAwareGenerator:

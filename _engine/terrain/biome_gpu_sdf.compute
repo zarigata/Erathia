@@ -5,6 +5,7 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 // Uniforms
 layout(set = 0, binding = 0) uniform sampler2D biome_map; // R=biome_id (0-1), G=dist_edge (0-1)
 layout(r32f, set = 0, binding = 1) uniform writeonly image3D sdf_output;
+layout(r32ui, set = 0, binding = 2) uniform writeonly uimage3D material_output;
 
 layout(push_constant, std430) uniform Params {
 	vec3 chunk_origin;     // World position of chunk corner
@@ -32,6 +33,18 @@ const int BIOME_VOLCANIC = 11;
 const int BIOME_HELLSCAPE = 12;
 const int BIOME_BEACH = 13;
 const int BIOME_OCEAN = 14;
+
+// Material IDs (match gpu_terrain_generator.gd)
+const uint MAT_AIR = 0u;
+const uint MAT_DIRT = 1u;
+const uint MAT_STONE = 2u;
+const uint MAT_IRON_ORE = 3u;
+const uint MAT_SAND = 4u;
+const uint MAT_SNOW = 5u;
+const uint MAT_GRASS = 6u;
+
+const float SURFACE_THICKNESS = 3.0;
+const float DIRT_THICKNESS = 6.0;
 
 // Simple hash and noise helpers
 float hash(vec3 p) {
@@ -135,15 +148,100 @@ float hellscape_sdf(vec3 p) {
 	return p.y - warped;
 }
 
-float beach_sdf(vec3 p) {
-	float ripples = fbm(p * 0.02, 0.8, 2) * 1.5;
-	float terrace = smoothstep(-3.0, 3.0, p.y - p.sea_level) * 3.0;
-	return (abs(p.y - p.sea_level) - 1.5) + ripples + terrace;
+float beach_sdf(vec3 world_pos) {
+	float ripples = fbm(world_pos * 0.02, 0.8, 2) * 1.5;
+	float terrace = smoothstep(-3.0, 3.0, world_pos.y - p.sea_level) * 3.0;
+	return (abs(world_pos.y - p.sea_level) - 1.5) + ripples + terrace;
 }
 
-float ocean_sdf(vec3 p) {
-	float swell = fbm(p * 0.008, 1.2, 3) * 4.0;
-	return (p.y - (p.sea_level - 18.0)) + swell;
+float ocean_sdf(vec3 world_pos) {
+	float swell = fbm(world_pos * 0.008, 1.2, 3) * 4.0;
+	return (world_pos.y - (p.sea_level - 18.0)) + swell;
+}
+
+float terrain_height_from_sdf(int biome_id, vec3 world_pos) {
+	return world_pos.y - get_biome_sdf(biome_id, world_pos);
+}
+
+float calculate_slope(vec3 world_pos) {
+	// Sample small offsets to approximate gradient magnitude (tan of slope angle)
+	float sample_dist = 2.0;
+	float h_center = world_pos.y - get_biome_sdf(BIOME_PLAINS, world_pos);
+	float h_east = world_pos.y - get_biome_sdf(BIOME_PLAINS, world_pos + vec3(sample_dist, 0.0, 0.0));
+	float h_west = world_pos.y - get_biome_sdf(BIOME_PLAINS, world_pos - vec3(sample_dist, 0.0, 0.0));
+	float h_north = world_pos.y - get_biome_sdf(BIOME_PLAINS, world_pos + vec3(0.0, 0.0, sample_dist));
+	float h_south = world_pos.y - get_biome_sdf(BIOME_PLAINS, world_pos - vec3(0.0, 0.0, sample_dist));
+	float dx = (h_east - h_west) / (2.0 * sample_dist);
+	float dz = (h_north - h_south) / (2.0 * sample_dist);
+	return sqrt(dx * dx + dz * dz);
+}
+
+uint get_subsurface_material(int biome_id) {
+	if (biome_id == BIOME_DESERT || biome_id == BIOME_BEACH) {
+		return MAT_SAND;
+	}
+	return MAT_DIRT;
+}
+
+uint get_surface_material(int biome_id, vec3 world_pos, float terrain_height) {
+	float slope = calculate_slope(world_pos);
+
+	// Steep slopes default to stone
+	if (slope > 0.577) {
+		return MAT_STONE;
+	}
+
+	if (biome_id == BIOME_DESERT || biome_id == BIOME_BEACH) {
+		return MAT_SAND;
+	}
+	if (biome_id == BIOME_TUNDRA || biome_id == BIOME_ICE_SPIRES) {
+		if (slope > 0.364) {
+			float blend = (slope - 0.364) / (0.577 - 0.364);
+			return blend > 0.5 ? MAT_STONE : MAT_SNOW;
+		}
+		return MAT_SNOW;
+	}
+	if (biome_id == BIOME_VOLCANIC || biome_id == BIOME_MOUNTAIN) {
+		return MAT_STONE;
+	}
+	if (biome_id == BIOME_MARSH || biome_id == BIOME_SWAMP || biome_id == BIOME_MUSHROOM) {
+		return MAT_DIRT;
+	}
+	if (biome_id == BIOME_OCEAN) {
+		return MAT_SAND;
+	}
+
+	// Default to grass with slope-based rock blend
+	if (slope > 0.466) {
+		float blend = (slope - 0.466) / (0.577 - 0.466);
+		return blend > 0.5 ? MAT_STONE : MAT_GRASS;
+	}
+	return MAT_GRASS;
+}
+
+uint get_material(int biome_id, float sdf, vec3 world_pos) {
+	if (sdf > 0.0) {
+		return MAT_AIR;
+	}
+
+	float terrain_height = terrain_height_from_sdf(biome_id, world_pos);
+	float depth = terrain_height - world_pos.y;
+
+	if (depth < SURFACE_THICKNESS) {
+		return get_surface_material(biome_id, world_pos, terrain_height);
+	}
+
+	if (depth < SURFACE_THICKNESS + DIRT_THICKNESS) {
+		return get_subsurface_material(biome_id);
+	}
+
+	// Deep underground: stone with ore noise
+	float ore_noise = fbm(world_pos * 0.07 + vec3(float(p.seed)), 1.2, 3);
+	if (sdf <= -10.0 && ore_noise > 0.6) {
+		return MAT_IRON_ORE;
+	}
+
+	return MAT_STONE;
 }
 
 float get_biome_sdf(int biome_id, vec3 world_pos) {
@@ -213,4 +311,6 @@ void main() {
 	}
 
 	imageStore(sdf_output, voxel_coord, vec4(sdf, 0.0, 0.0, 0.0));
+	uint material_id = get_material(biome_id, sdf, world_pos);
+	imageStore(material_output, voxel_coord, uvec4(material_id, 0u, 0u, 0u));
 }

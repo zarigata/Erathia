@@ -76,3 +76,33 @@ layout_mode = 2
 custom_minimum_size = Vector2(200, 60)
 layout_mode = 2
 script = ExtResource("2_graph")
+
+[node name="HSeparator5" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="GPUComputeLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "GPU Compute: 0.00 ms"
+
+[node name="TerrainGenLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Terrain Gen: 0.00 ms"
+
+[node name="VegetationSpawnLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Vegetation: 0.00 ms"
+
+[node name="HSeparator6" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="WorkloadLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Workload: CPU 33% | Compute 33% | Render 34%"
+
+[node name="HSeparator7" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="WarningsLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Performance: OK"
+modulate = Color(0, 1, 0, 1)

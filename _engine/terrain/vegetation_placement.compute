@@ -1,0 +1,221 @@
+#version 450
+
+// GPU Vegetation Placement Compute Shader
+// Samples terrain SDF directly on GPU to generate vegetation placement candidates.
+
+layout(local_size_x = 8, local_size_y = 1, local_size_z = 8) in;
+
+// ------------------------------------------------------------------
+// Bindings
+// ------------------------------------------------------------------
+layout(set = 0, binding = 0) uniform sampler3D terrain_sdf;
+layout(set = 0, binding = 1) uniform sampler2D biome_map;
+
+struct PlacementData {
+	vec3 position;     // World position
+	vec3 normal;       // Surface normal
+	uint variant_index;
+	uint instance_seed;
+	float scale;
+	float rotation_y;
+};
+
+layout(std430, set = 0, binding = 2) buffer PlacementBuffer {
+	uint placement_count;
+	PlacementData placements[4096];
+};
+
+// ------------------------------------------------------------------
+// Push Constants
+// ------------------------------------------------------------------
+layout(push_constant, std430) uniform Params {
+	vec3 chunk_origin;     // World position of chunk corner
+	float grid_spacing;    // Sampling grid spacing
+	int chunk_size;        // 32
+	int grid_steps;        // Steps per axis for sampling grid
+	uint world_seed;       // Global seed
+	int vegetation_type;   // Vegetation type enum
+	float density;         // 0-1 threshold
+	float noise_frequency; // Noise frequency
+	float slope_max;       // Max slope in degrees
+	float height_min;      // Min Y
+	float height_max;      // Max Y
+} p;
+
+// ------------------------------------------------------------------
+// Hash / Noise Helpers (borrowed from biome_gpu_sdf.compute)
+// ------------------------------------------------------------------
+float hash(vec3 v) {
+	v = vec3(dot(v, vec3(127.1, 311.7, 74.7)),
+	         dot(v, vec3(269.5, 183.3, 246.1)),
+	         dot(v, vec3(113.5, 271.9, 124.6)));
+	return fract(sin(v) * 43758.5453123).x;
+}
+
+float noise3d(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+
+	float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+	float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+
+	float nxy0 = mix(nx00, nx10, f.y);
+	float nxy1 = mix(nx01, nx11, f.y);
+
+	return mix(nxy0, nxy1, f.z) * 2.0 - 1.0;
+}
+
+float fbm(vec3 p, float freq, int octaves) {
+	float value = 0.0;
+	float amplitude = 0.5;
+	for (int i = 0; i < octaves; i++) {
+		value += amplitude * noise3d(p * freq);
+		amplitude *= 0.5;
+		freq *= 2.0;
+	}
+	return value;
+}
+
+// ------------------------------------------------------------------
+// Terrain sampling helpers
+// ------------------------------------------------------------------
+float sample_terrain_sdf(vec3 world_pos) {
+	vec3 local = (world_pos - p.chunk_origin) / float(p.chunk_size);
+	local = clamp(local, vec3(0.0), vec3(0.999));
+	return texture(terrain_sdf, local).r;
+}
+
+vec3 estimate_normal(vec3 world_pos) {
+	float eps = 0.5;
+	float dx = sample_terrain_sdf(world_pos + vec3(eps, 0.0, 0.0)) - sample_terrain_sdf(world_pos - vec3(eps, 0.0, 0.0));
+	float dy = sample_terrain_sdf(world_pos + vec3(0.0, eps, 0.0)) - sample_terrain_sdf(world_pos - vec3(0.0, eps, 0.0));
+	float dz = sample_terrain_sdf(world_pos + vec3(0.0, 0.0, eps)) - sample_terrain_sdf(world_pos - vec3(0.0, 0.0, eps));
+	vec3 g = vec3(dx, dy, dz);
+	if (length(g) < 0.0001) {
+		return vec3(0.0, 1.0, 0.0);
+	}
+	return normalize(g);
+}
+
+bool find_surface(vec2 xz, out vec3 surface_pos, out vec3 normal) {
+	float top = p.chunk_origin.y + float(p.chunk_size);
+	float bottom = p.chunk_origin.y - 4.0;
+	float step = 1.0;
+	float prev_sdf = sample_terrain_sdf(vec3(xz.x, top, xz.y));
+
+	for (float y = top; y >= bottom; y -= step) {
+		vec3 pos = vec3(xz.x, y, xz.y);
+		float sdf = sample_terrain_sdf(pos);
+
+		// Positive = air, negative/zero = solid. Detect air->solid crossing.
+		if (prev_sdf > 0.0 && sdf <= 0.0) {
+			float t = prev_sdf / (prev_sdf - sdf + 1e-4);
+			float surf_y = y + step * (1.0 - t);
+			surface_pos = vec3(xz.x, surf_y, xz.y);
+			normal = estimate_normal(surface_pos);
+			return true;
+		}
+
+		prev_sdf = sdf;
+	}
+
+	return false;
+}
+
+float calculate_slope(vec3 normal) {
+	// Normal.y is cos(theta) from vertical
+	float slope_angle = degrees(acos(clamp(normal.y, 0.0, 1.0)));
+	return slope_angle;
+}
+
+bool check_height(float y) {
+	return (y >= p.height_min) && (y <= p.height_max);
+}
+
+// ------------------------------------------------------------------
+// Placement validation
+// ------------------------------------------------------------------
+bool check_density(vec3 world_pos) {
+	float n = fbm(world_pos + vec3(float(p.world_seed)), p.noise_frequency, 3);
+	n = (n + 1.0) * 0.5;
+	return n >= (1.0 - p.density);
+}
+
+uint random_variant(vec3 world_pos) {
+	float h = hash(world_pos + vec3(float(p.world_seed) * 0.37, 13.37, float(p.vegetation_type)));
+	return uint(h * 65535.0);
+}
+
+float random_scale(vec3 world_pos) {
+	float h = hash(world_pos + vec3(91.0, 17.0, float(p.vegetation_type) * 3.0));
+	return 0.8 + h * 0.4; // 0.8 - 1.2
+}
+
+float random_rotation(vec3 world_pos) {
+	float h = hash(world_pos + vec3(7.0, 19.0, float(p.world_seed) * 0.11));
+	return h * 6.28318530718; // 0 - 2PI
+}
+
+// ------------------------------------------------------------------
+// Main
+// ------------------------------------------------------------------
+void main() {
+	ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
+	if (any(greaterThanEqual(gid, ivec3(p.grid_steps)))) {
+		return;
+	}
+
+	// Each invocation corresponds to one grid sample on XZ
+	float step_clamped = max(p.grid_spacing, 0.001);
+	float max_extent = float(p.chunk_size) - step_clamped;
+	vec3 world_pos = p.chunk_origin + vec3(min(float(gid.x) * p.grid_spacing, max_extent), 0.0, min(float(gid.z) * p.grid_spacing, max_extent));
+	vec2 xz = world_pos.xz;
+
+	// Density noise filter
+	if (!check_density(world_pos)) {
+		return;
+	}
+
+	vec3 surface_pos;
+	vec3 normal;
+	if (!find_surface(xz, surface_pos, normal)) {
+		return;
+	}
+
+	if (!check_height(surface_pos.y)) {
+		return;
+	}
+
+	float slope = calculate_slope(normal);
+	if (slope > p.slope_max) {
+		return;
+	}
+
+	// Reserve slot
+	uint idx = atomicAdd(placement_count, 1u);
+	if (idx >= 4096u) {
+		return;
+	}
+
+	PlacementData pd;
+	pd.position = surface_pos;
+	pd.normal = normal;
+	pd.variant_index = random_variant(surface_pos);
+	pd.instance_seed = pd.variant_index ^ uint(surface_pos.x * 13.0 + surface_pos.z * 7.0);
+	pd.scale = random_scale(surface_pos);
+	pd.rotation_y = random_rotation(surface_pos);
+
+	placements[idx] = pd;
+}
