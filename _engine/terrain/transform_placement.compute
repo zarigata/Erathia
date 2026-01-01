@@ -1,0 +1,84 @@
+#version 450
+
+// GPU Transform Matrix Generation Compute Shader
+// Converts PlacementData buffer to Transform3D matrices (3x4 row-major) for MultiMesh
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// ------------------------------------------------------------------
+// Input: PlacementData buffer
+// ------------------------------------------------------------------
+struct PlacementData {
+	vec3 position;     // World position
+	float _padding1;
+	vec3 normal;       // Surface normal
+	float _padding2;
+	uint variant_index;
+	uint instance_seed;
+	float scale;
+	float rotation_y;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer PlacementBuffer {
+	uint placement_count;
+	uint _padding[3];
+	PlacementData placements[];
+};
+
+// ------------------------------------------------------------------
+// Output: Transform matrices (12 floats per instance: 3x4 row-major)
+// ------------------------------------------------------------------
+layout(std430, set = 0, binding = 1) writeonly buffer TransformBuffer {
+	float transforms[];  // 12 floats per instance
+};
+
+// ------------------------------------------------------------------
+// Push Constants
+// ------------------------------------------------------------------
+layout(push_constant, std430) uniform Params {
+	uint instance_count;
+	uint _padding[3];
+} p;
+
+// ------------------------------------------------------------------
+// Transform generation
+// ------------------------------------------------------------------
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	
+	if (idx >= p.instance_count) {
+		return;
+	}
+	
+	PlacementData pd = placements[idx];
+	
+	// Build rotation matrix from rotation_y
+	float cos_y = cos(pd.rotation_y);
+	float sin_y = sin(pd.rotation_y);
+	float scale = pd.scale;
+	
+	// Transform3D in Godot is stored as 3x4 matrix (row-major):
+	// [basis.x.x, basis.y.x, basis.z.x, origin.x]
+	// [basis.x.y, basis.y.y, basis.z.y, origin.y]
+	// [basis.x.z, basis.y.z, basis.z.z, origin.z]
+	
+	uint base_offset = idx * 12u;
+	
+	// Row 0: X basis (rotated around Y and scaled)
+	transforms[base_offset + 0u] = cos_y * scale;
+	transforms[base_offset + 1u] = 0.0;
+	transforms[base_offset + 2u] = sin_y * scale;
+	transforms[base_offset + 3u] = pd.position.x;
+	
+	// Row 1: Y basis (up, scaled)
+	transforms[base_offset + 4u] = 0.0;
+	transforms[base_offset + 5u] = scale;
+	transforms[base_offset + 6u] = 0.0;
+	transforms[base_offset + 7u] = pd.position.y;
+	
+	// Row 2: Z basis (rotated around Y and scaled)
+	transforms[base_offset + 8u] = -sin_y * scale;
+	transforms[base_offset + 9u] = 0.0;
+	transforms[base_offset + 10u] = cos_y * scale;
+	transforms[base_offset + 11u] = pd.position.z;
+}

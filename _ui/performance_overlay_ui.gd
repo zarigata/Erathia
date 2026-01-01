@@ -163,9 +163,9 @@ func _on_metrics_updated(data: Dictionary) -> void:
 				workload_label.visible = false
 			else:
 				workload_label.visible = true
-				var cpu_pct := workload.get("cpu", 0.0) * 100.0
-				var compute_pct := workload.get("gpu_compute", 0.0) * 100.0
-				var render_pct := workload.get("gpu_render", 0.0) * 100.0
+				var cpu_pct: float = workload.get("cpu", 0.0) * 100.0
+				var compute_pct: float = workload.get("gpu_compute", 0.0) * 100.0
+				var render_pct: float = workload.get("gpu_render", 0.0) * 100.0
 				workload_label.text = "Workload: CPU %.0f%% | Compute %.0f%% | Render %.0f%%" % [cpu_pct, compute_pct, render_pct]
 		
 		# Performance warnings

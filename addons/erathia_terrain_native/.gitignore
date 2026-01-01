@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+bin/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln.docstates
+
+# Compiled files
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake

@@ -109,6 +109,9 @@ func _update_metrics() -> void:
 	_compute_frame_breakdown()
 	_check_performance_budgets()
 	
+	# Get async GPU telemetry if available
+	var async_gpu_stats := _get_async_gpu_telemetry()
+	
 	_current_metrics = {
 		"fps": fps,
 		"fps_status": fps_status,
@@ -138,7 +141,8 @@ func _update_metrics() -> void:
 		"performance_warnings": _performance_warnings.duplicate(),
 		"gpu_memory_mb": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0,
 		"gpu_memory_max_mb": _get_gpu_memory_max(),
-		"workload_distribution": _calculate_workload_distribution()
+		"workload_distribution": _calculate_workload_distribution(),
+		"async_gpu_stats": async_gpu_stats
 	}
 	
 	metrics_updated.emit(_current_metrics)
@@ -248,9 +252,14 @@ func _collect_gpu_metrics() -> void:
 	_terrain_generation_time_ms = 0.0
 	_vegetation_spawning_time_ms = 0.0
 	
-	var terrain_gen := _get_gpu_terrain_generator()
+	var terrain_gen = _get_gpu_terrain_generator()
 	if terrain_gen:
-		if terrain_gen.has_method("get_last_generation_time_ms"):
+		# Support async GPU telemetry from NativeTerrainGenerator
+		if terrain_gen.has_method("get_telemetry"):
+			var stats = terrain_gen.get_telemetry()
+			_terrain_generation_time_ms = stats.get("average_gpu_time_ms", 0.0)
+			_gpu_compute_time_ms = stats.get("current_frame_gpu_time_ms", 0.0)
+		elif terrain_gen.has_method("get_last_generation_time_ms"):
 			_terrain_generation_time_ms = terrain_gen.get_last_generation_time_ms()
 	
 	var biome_dispatcher := _get_biome_gpu_dispatcher()
@@ -258,7 +267,7 @@ func _collect_gpu_metrics() -> void:
 		if biome_dispatcher.has_method("get_last_compute_time_ms"):
 			_gpu_compute_time_ms += biome_dispatcher.get_last_compute_time_ms()
 	
-	var vegetation_dispatcher := _get_vegetation_gpu_dispatcher()
+	var vegetation_dispatcher = _get_vegetation_gpu_dispatcher()
 	if vegetation_dispatcher:
 		if vegetation_dispatcher.has_method("get_last_placement_time_ms"):
 			_vegetation_spawning_time_ms = vegetation_dispatcher.get_last_placement_time_ms()
@@ -492,24 +501,43 @@ func get_performance_warnings() -> Array[String]:
 	return _performance_warnings.duplicate()
 
 
-func _get_gpu_terrain_generator() -> GPUTerrainGenerator:
+func _get_gpu_terrain_generator():
 	var terrain := get_tree().current_scene.get_node_or_null("VoxelLodTerrain")
-	if terrain and terrain.generator is GPUTerrainGenerator:
-		return terrain.generator as GPUTerrainGenerator
+	if terrain and terrain.generator:
+		# Support both GPUTerrainGenerator and NativeTerrainGenerator
+		return terrain.generator
 	return null
 
 
 func _get_biome_gpu_dispatcher() -> BiomeMapGPUDispatcher:
-	var gen := _get_gpu_terrain_generator()
+	var gen = _get_gpu_terrain_generator()
 	if gen and gen.has_method("get_gpu_dispatcher"):
 		return gen.get_gpu_dispatcher()
 	return null
 
 
-func _get_vegetation_gpu_dispatcher() -> GPUVegetationDispatcher:
+func _get_vegetation_gpu_dispatcher():
 	var terrain := get_tree().current_scene.get_node_or_null("VoxelLodTerrain")
 	if terrain:
 		var veg_instancer := terrain.get_node_or_null("VegetationInstancer")
 		if veg_instancer and veg_instancer.has_method("get_gpu_dispatcher"):
 			return veg_instancer.get_gpu_dispatcher()
 	return null
+
+
+## Get async GPU telemetry from NativeTerrainGenerator
+func _get_async_gpu_telemetry() -> Dictionary:
+	var terrain_gen = _get_gpu_terrain_generator()
+	if terrain_gen and terrain_gen.has_method("get_telemetry"):
+		return terrain_gen.get_telemetry()
+	return {
+		"chunks_dispatched_this_frame": 0,
+		"chunks_completed_this_frame": 0,
+		"total_chunks_generated": 0,
+		"average_gpu_time_ms": 0.0,
+		"queue_size": 0,
+		"in_flight_chunks": 0,
+		"cached_chunks": 0,
+		"current_frame_gpu_time_ms": 0.0,
+		"frame_budget_ms": 8.0
+	}

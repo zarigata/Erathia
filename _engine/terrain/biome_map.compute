@@ -1,5 +1,4 @@
-shader_type compute;
-render_mode skip_vertex_transform;
+#version 450
 
 // Writes biome id (R, 0..1 normalized) and distance-to-edge (G, 0..1) for Voronoi/Worley F2
 // Tunable via push constants:
@@ -12,7 +11,7 @@ render_mode skip_vertex_transform;
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // Optional jitter sampler; can be left unbound
-uniform sampler2D u_seed_noise;
+layout(set = 0, binding = 0) uniform sampler2D u_seed_noise;
 
 // Output storage image; R = biome id normalized, G = distance to edge
 // Bind this as storage texture (R32G32_SFLOAT recommended)

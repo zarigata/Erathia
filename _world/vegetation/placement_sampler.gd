@@ -43,7 +43,7 @@ const MIN_DISTANCE: Dictionary = {
 var _placement_noise: FastNoiseLite
 var _variation_noise: FastNoiseLite
 var _world_seed: int = 12345
-var _gpu_dispatcher: GPUVegetationDispatcher
+var _gpu_dispatcher  # Can be GPUVegetationDispatcher or NativeVegetationDispatcher
 var _terrain_dispatcher: BiomeMapGPUDispatcher
 var _use_gpu: bool = true
 
@@ -64,8 +64,17 @@ func _init(seed_value: int = 12345) -> void:
 	_variation_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_variation_noise.frequency = 0.5
 	
-	_gpu_dispatcher = GPUVegetationDispatcher.new()
-	_use_gpu = _gpu_dispatcher.is_ready()
+	# Comment 2 fix: Instantiate NativeVegetationDispatcher when available
+	if ClassDB.class_exists("NativeVegetationDispatcher"):
+		_gpu_dispatcher = NativeVegetationDispatcher.new()
+		if _gpu_dispatcher.has_method("initialize_gpu"):
+			_gpu_dispatcher.initialize_gpu()
+		print("[PlacementSampler] Using NativeVegetationDispatcher (C++)")
+	else:
+		_gpu_dispatcher = GPUVegetationDispatcher.new()
+		print("[PlacementSampler] Using GPUVegetationDispatcher (GDScript fallback)")
+	
+	_use_gpu = _gpu_dispatcher != null and (_gpu_dispatcher.has_method("is_ready") == false or _gpu_dispatcher.is_ready())
 
 
 func set_terrain_dispatcher(dispatcher: BiomeMapGPUDispatcher) -> void:
@@ -77,7 +86,12 @@ func set_terrain_dispatcher(dispatcher: BiomeMapGPUDispatcher) -> void:
 
 func is_using_gpu() -> bool:
 	"""Returns true if GPU dispatcher is active and ready."""
-	return _use_gpu and _gpu_dispatcher != null and _gpu_dispatcher.is_ready() and _terrain_dispatcher != null
+	if not _use_gpu or _gpu_dispatcher == null or _terrain_dispatcher == null:
+		return false
+	# Check if dispatcher has is_ready method (GPUVegetationDispatcher) or assume ready (NativeVegetationDispatcher)
+	if _gpu_dispatcher.has_method("is_ready"):
+		return _gpu_dispatcher.is_ready()
+	return true  # NativeVegetationDispatcher is always ready after initialization
 
 
 func force_cpu_mode() -> void:
@@ -86,18 +100,25 @@ func force_cpu_mode() -> void:
 	print("[PlacementSampler] Forced to CPU mode")
 
 
+func get_gpu_dispatcher():
+	"""Returns the GPU dispatcher instance for direct buffer access (can be GPUVegetationDispatcher or NativeVegetationDispatcher)."""
+	return _gpu_dispatcher
+
+
 # =============================================================================
 # PUBLIC API
 # =============================================================================
 
 ## Sample placement positions for a chunk
 ## Returns array of dictionaries with position, transform, type, variant
+## If gpu_only is true, only populates GPU caches and returns empty array
 func sample_chunk(
 	chunk_origin: Vector3i,
 	chunk_size: int,
 	biome_id: int,
 	terrain: Node,  # VoxelLodTerrain
-	rules: Dictionary
+	rules: Dictionary,
+	gpu_only: bool = false
 ) -> Array[Dictionary]:
 	var placements: Array[Dictionary] = []
 	var veg_types: Array = rules.get("types", [])
@@ -108,6 +129,35 @@ func sample_chunk(
 		return placements
 
 	var gpu_available := is_using_gpu()
+	
+	# GPU-only mode: populate caches without CPU readback
+	if gpu_only and gpu_available:
+		for veg_type_data: Dictionary in veg_types:
+			var veg_type: int = veg_type_data.get("type", VegetationManager.VegetationType.BUSH)
+			var density: float = VegetationManager.get_effective_density(biome_id, veg_type_data)
+			var variants: Array = veg_type_data.get("variants", [])
+			
+			if variants.is_empty() or density <= 0.0:
+				continue
+			
+			var grid_spacing: float = GRID_SPACING.get(veg_type, 2.0)
+			var noise_freq: float = NOISE_FREQUENCY.get(veg_type, 0.1)
+			
+			# Generate placements on GPU
+			_gpu_dispatcher.generate_placements(
+				chunk_origin,
+				veg_type,
+				density,
+				grid_spacing,
+				noise_freq,
+				slope_max,
+				height_range,
+				_world_seed,
+				_terrain_dispatcher.get_biome_map_texture()
+			)
+		
+		# Return empty array - caller should use get_transform_buffer_rid()
+		return placements
 	
 	# Process each vegetation type
 	for veg_type_data: Dictionary in veg_types:
@@ -123,7 +173,7 @@ func sample_chunk(
 		var min_dist: float = MIN_DISTANCE.get(veg_type, 1.0)
 		
 		if gpu_available:
-			var gpu_results := _gpu_dispatcher.generate_placements(
+			var gpu_results: Array[Dictionary] = _gpu_dispatcher.generate_placements(
 				chunk_origin,
 				veg_type,
 				density,

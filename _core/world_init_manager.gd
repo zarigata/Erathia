@@ -40,6 +40,8 @@ const STAGE_TIMEOUT_SECONDS: float = 60.0
 const PREWARM_RADIUS_CHUNKS: int = 3  # 3x3 grid = 9 chunks
 const MIN_VEGETATION_COUNT: int = 10
 const MIN_BIOME_VARIETY: int = 1  # At least 1 biome (relaxed for small spawn area)
+const MAX_PREWARM_CHUNKS: int = 50  # Safety limit to prevent infinite loops
+const MAX_CHUNK_GENERATION_ATTEMPTS: int = 100  # Maximum chunk generation callbacks
 
 # =============================================================================
 # STATE
@@ -70,6 +72,8 @@ var _chunks_pending: int = 0
 var _log_file_path: String = "user://world_init_log.txt"
 var _log_file: FileAccess = null
 var _stage_timings: Dictionary = {}
+var _chunk_generation_attempts: int = 0  # Track total chunk generation callbacks
+var _processed_chunk_origins: Dictionary = {}  # Deduplicate chunk origins
 
 # =============================================================================
 # INITIALIZATION
@@ -245,7 +249,7 @@ func _stage_generate_map() -> void:
 
 
 func _on_map_generated(seed_value: int) -> void:
-	var duration := Time.get_ticks_msec() - _stage_timings.get("Generating Map_start", Time.get_ticks_msec())
+	var duration: int = Time.get_ticks_msec() - _stage_timings.get("Generating Map_start", Time.get_ticks_msec())
 	_log_to_file("[color=green][WorldInitManager] Stage: Generating Map - Complete (%.2fs) Seed=%d[/color]" % [duration / 1000.0, seed_value])
 	_stage_progress = 1.0
 	stage_completed.emit("Generating World Map", 1.0)
@@ -294,7 +298,7 @@ func _stage_load_biomes() -> void:
 	
 	_stage_progress = 1.0
 	stage_completed.emit("Loading Biomes", 1.0)
-	var duration := Time.get_ticks_msec() - _stage_timings.get("Loading Biomes_start", Time.get_ticks_msec())
+	var duration: int = Time.get_ticks_msec() - _stage_timings.get("Loading Biomes_start", Time.get_ticks_msec())
 	_log_to_file("[color=green][WorldInitManager] Stage: Loading Biomes - Complete (%.2fs)[/color]" % [duration / 1000.0])
 	
 	# Short delay to let terrain system process
@@ -311,10 +315,12 @@ func _stage_prewarm_terrain() -> void:
 	
 	_log_to_file("[color=cyan][WorldInitManager] Stage: Prewarming Terrain around spawn - Starting[/color]")
 	
-	# Build list of chunks to prewarm
+	# Build list of chunks to prewarm (DEDUPLICATED)
 	_chunks_to_prewarm.clear()
 	_prewarmed_chunks.clear()
 	_prewarm_complete = false
+	_chunk_generation_attempts = 0  # Reset safety counter
+	_processed_chunk_origins.clear()  # Reset deduplication tracker
 	
 	var chunk_size := 32
 	var center_chunk := Vector3i(
@@ -323,6 +329,9 @@ func _stage_prewarm_terrain() -> void:
 		int(spawn_position.z / chunk_size) * chunk_size
 	)
 	
+	# Use Dictionary for deduplication, then convert to Array
+	var unique_chunks: Dictionary = {}
+	
 	for x in range(-PREWARM_RADIUS_CHUNKS, PREWARM_RADIUS_CHUNKS + 1):
 		for z in range(-PREWARM_RADIUS_CHUNKS, PREWARM_RADIUS_CHUNKS + 1):
 			var chunk_origin := Vector3i(
@@ -330,9 +339,32 @@ func _stage_prewarm_terrain() -> void:
 				0,
 				center_chunk.z + z * chunk_size
 			)
-			_chunks_to_prewarm.append(chunk_origin)
+			unique_chunks[chunk_origin] = true  # Dictionary key ensures uniqueness
 	
-	print("[WorldInitManager] Prewarming %d chunks" % _chunks_to_prewarm.size())
+	# Convert to array
+	_chunks_to_prewarm = unique_chunks.keys()
+	
+	# Log deduplication results
+	var expected_count := (PREWARM_RADIUS_CHUNKS * 2 + 1) * (PREWARM_RADIUS_CHUNKS * 2 + 1)
+	if _chunks_to_prewarm.size() < expected_count:
+		push_warning("[WorldInitManager] Deduplicated %d chunks to %d unique origins" % [expected_count, _chunks_to_prewarm.size()])
+	
+	# Safety check: Limit chunk count
+	if _chunks_to_prewarm.size() > MAX_PREWARM_CHUNKS:
+		push_error("[WorldInitManager] Prewarm chunk count (%d) exceeds safety limit (%d), aborting" % [_chunks_to_prewarm.size(), MAX_PREWARM_CHUNKS])
+		_handle_stage_failure("Too many chunks to prewarm")
+		return
+	
+	# Validation: Ensure we have chunks to prewarm
+	if _chunks_to_prewarm.size() == 0:
+		push_error("[WorldInitManager] No chunks to prewarm, aborting")
+		_handle_stage_failure("Empty prewarm chunk list")
+		return
+	
+	# Validation: Check for reasonable chunk count
+	var expected_min := max(1, (PREWARM_RADIUS_CHUNKS * 2 + 1) * (PREWARM_RADIUS_CHUNKS * 2 + 1) - 5)
+	if _chunks_to_prewarm.size() < expected_min:
+		push_warning("[WorldInitManager] Prewarm chunk count (%d) is lower than expected (%d+)" % [_chunks_to_prewarm.size(), expected_min])
 	
 	# Track chunk generation via generator signal
 	if _terrain and _terrain.generator and _terrain.generator.has_signal("chunk_generated"):
@@ -340,7 +372,10 @@ func _stage_prewarm_terrain() -> void:
 			_terrain.generator.chunk_generated.connect(_on_chunk_generated)
 	
 	_chunks_generated.clear()
-	_chunks_pending = _chunks_to_prewarm.size()
+	_chunks_pending = _chunks_to_prewarm.size()  # Now guaranteed to be unique count
+	
+	print("[WorldInitManager] Prewarming %d unique chunks around spawn" % _chunks_pending)
+	_log_to_file("[color=cyan][WorldInitManager] Prewarm queue: %d unique chunks (center: %s)[/color]" % [_chunks_pending, center_chunk])
 	
 	# Trigger chunk generation by moving player/viewer to spawn
 	if _player:
@@ -361,29 +396,94 @@ func _stage_prewarm_terrain() -> void:
 
 
 func _on_chunk_generated(origin: Vector3i, biome_id: int) -> void:
+	# Safety check: Prevent infinite callback loops
+	_chunk_generation_attempts += 1
+	if _chunk_generation_attempts > MAX_CHUNK_GENERATION_ATTEMPTS:
+		push_error("[WorldInitManager] Chunk generation exceeded max attempts (%d), aborting prewarm" % MAX_CHUNK_GENERATION_ATTEMPTS)
+		_log_to_file("[color=red][WorldInitManager] SAFETY ABORT: Chunk generation exceeded max attempts[/color]")
+		_finish_prewarm()
+		return
+	
+	# Deduplicate: Only process each origin once
+	if origin in _processed_chunk_origins:
+		_log_to_file("[color=gray][WorldInitManager] Duplicate chunk callback ignored: %s (attempt %d)[/color]" % [origin, _chunk_generation_attempts])
+		return
+	_processed_chunk_origins[origin] = true
+	
+	# Only count chunks we actually requested
 	if origin in _chunks_to_prewarm:
 		_chunks_generated[origin] = true
 		_chunks_pending -= 1
 		var progress := float(_chunks_generated.size()) / float(_chunks_to_prewarm.size())
 		_on_prewarm_progress(progress)
+		
+		_log_to_file("[color=cyan][WorldInitManager] ✓ Chunk %s (biome %d) - Progress: %d/%d (%.0f%%) - Pending: %d[/color]" % [
+			origin, 
+			biome_id, 
+			_chunks_generated.size(), 
+			_chunks_to_prewarm.size(),
+			progress * 100.0,
+			_chunks_pending
+		])
+		
 		if _chunks_pending <= 0:
-			_on_prewarm_complete()
-	_log_to_file("[color=cyan][WorldInitManager] Chunk generated: %s (biome %d) - %d/%d complete[/color]" % [origin, biome_id, _chunks_generated.size(), _chunks_to_prewarm.size()])
+			_log_to_file("[color=green][WorldInitManager] All prewarm chunks generated, finishing...[/color]")
+			_finish_prewarm()
+	else:
+		# Chunk generated outside prewarm area (normal terrain streaming)
+		_log_to_file("[color=gray][WorldInitManager] Chunk %s generated (outside prewarm area, attempt %d)[/color]" % [origin, _chunk_generation_attempts])
 
 
 func _on_prewarm_progress(progress: float) -> void:
 	_stage_progress = progress
 	stage_completed.emit("Warming Terrain", progress)
-	_log_to_file("[color=cyan][WorldInitManager] Chunk prewarm progress: %.0f%%[/color]" % (progress * 100.0))
+	
+	var chunks_done := _chunks_generated.size()
+	var chunks_total := _chunks_to_prewarm.size()
+	var chunks_remaining := _chunks_pending
+	
+	_log_to_file("[color=cyan][WorldInitManager] Prewarm progress: %.0f%% (%d/%d chunks, %d pending)[/color]" % [
+		progress * 100.0,
+		chunks_done,
+		chunks_total,
+		chunks_remaining
+	])
+
+
+func _finish_prewarm() -> void:
+	# Consolidated prewarm completion logic
+	if _prewarm_complete:
+		_log_to_file("[color=yellow][WorldInitManager] _finish_prewarm() called multiple times (ignored)[/color]")
+		return  # Already finished, prevent double-call
+	
+	_prewarm_complete = true
+	
+	var chunks_generated := _chunks_generated.size()
+	var chunks_expected := _chunks_to_prewarm.size()
+	var completion_percentage := (float(chunks_generated) / float(chunks_expected)) * 100.0 if chunks_expected > 0 else 0.0
+	
+	var duration: int = Time.get_ticks_msec() - _stage_timings.get("Prewarming Terrain_start", Time.get_ticks_msec())
+	
+	if chunks_generated < chunks_expected:
+		_log_to_file("[color=yellow][WorldInitManager] Prewarm finished early: %d/%d chunks (%.0f%%) in %.2fs[/color]" % [
+			chunks_generated,
+			chunks_expected,
+			completion_percentage,
+			duration / 1000.0
+		])
+	else:
+		_log_to_file("[color=green][WorldInitManager] Stage: Prewarming Terrain - Complete (%.2fs)[/color]" % [duration / 1000.0])
+	
+	_log_to_file("[color=cyan][WorldInitManager] Total chunk generation callbacks: %d[/color]" % _chunk_generation_attempts)
+	_log_to_file("[color=cyan][WorldInitManager] Unique chunks processed: %d[/color]" % _processed_chunk_origins.size())
+	
+	_stage_progress = 1.0
+	stage_completed.emit("Warming Terrain", 1.0)
+	_stage_spawn_vegetation()
 
 
 func _on_prewarm_complete() -> void:
-	var duration := Time.get_ticks_msec() - _stage_timings.get("Prewarming Terrain_start", Time.get_ticks_msec())
-	_log_to_file("[color=green][WorldInitManager] Stage: Prewarming Terrain - Complete (%.2fs)[/color]" % [duration / 1000.0])
-	_stage_progress = 1.0
-	stage_completed.emit("Warming Terrain", 1.0)
-	_prewarm_complete = true
-	_stage_spawn_vegetation()
+	_finish_prewarm()
 
 
 func _stage_spawn_vegetation() -> void:
@@ -464,12 +564,12 @@ func _complete_initialization() -> void:
 	var safe_spawn := _find_safe_spawn_position()
 	spawn_position = safe_spawn
 	
-	var total_time := Time.get_ticks_msec() - _stage_timings.get("total_start", Time.get_ticks_msec())
+	var total_time: int = Time.get_ticks_msec() - _stage_timings.get("total_start", Time.get_ticks_msec())
 	_log_to_file("[color=green][WorldInitManager] === Initialization Complete (%.2fs) ===[/color]" % [total_time / 1000.0])
 	for key in _stage_timings.keys():
 		if key.ends_with("_start"):
-			var label := key.replace("_start", "")
-			var duration := Time.get_ticks_msec() - _stage_timings.get(key, Time.get_ticks_msec())
+			var label: String = key.replace("_start", "")
+			var duration: int = Time.get_ticks_msec() - _stage_timings.get(key, Time.get_ticks_msec())
 			_log_to_file("[color=green][WorldInitManager] Stage Summary: %s (%.2fs)[/color]" % [label, duration / 1000.0])
 	_log_to_file("[color=green][WorldInitManager] Safe spawn: %s[/color]" % spawn_position)
 	_close_log_file()

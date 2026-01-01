@@ -75,6 +75,7 @@ func _initialize_device() -> void:
 		return
 	
 	var rd_source := RDShaderSource.new()
+	rd_source.language = RenderingDevice.SHADER_LANGUAGE_GLSL
 	rd_source.set_stage_source(RenderingDevice.SHADER_STAGE_COMPUTE, shader_source)
 	var shader_spirv: RDShaderSPIRV = _rd.shader_compile_spirv_from_source(rd_source) as RDShaderSPIRV
 	if shader_spirv == null:

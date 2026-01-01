@@ -1,7 +1,7 @@
 [submodule "addons/erathia_terrain_native/godot-cpp"]
 	path = addons/erathia_terrain_native/godot-cpp
 	url = https://github.com/godotengine/godot-cpp
-	branch = 4.4
+	branch = master
 [submodule "addons/godot_voxel_cpp"]
 	path = addons/godot_voxel_cpp
 	url = https://github.com/Zylann/godot_voxel

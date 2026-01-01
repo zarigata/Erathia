@@ -394,46 +394,199 @@ func _populate_chunk(chunk_origin: Vector3i) -> void:
 	
 	# Sample placements
 	_ensure_terrain_dispatcher()
-	var placements := _placement_sampler.sample_chunk(
-		chunk_origin,
-		CHUNK_SIZE,
-		biome_id,
-		_terrain,
-		rules
-	)
 	
-	if _terrain and not _terrain.has_method("get_voxel_tool") and debug_logging:
-		push_warning("[VegetationInstancer] Terrain has no get_voxel_tool; placements may be empty")
+	# Try GPU path first if available
+	var gpu_dispatcher = get_gpu_dispatcher()
+	var used_gpu_path := false
+	var total_placements := 0
+	var gpu_failed := false
 	
-	# If placement yields zero results and terrain might not be ready,
-	# requeue the chunk for a later attempt instead of marking as populated
-	if placements.is_empty():
-		# Check if this could be due to missing surface data
-		# If biome has vegetation types but we got zero placements, terrain may not be ready
-		var biome_types: Array = rules.get("types", [])
-		if not biome_types.is_empty() and not _terrain_ready_chunks.has(chunk_origin):
-			# Terrain not confirmed ready and biome should have vegetation - defer
-			if not chunk_origin in _deferred_chunks:
-				_deferred_chunks.append(chunk_origin)
-			return
-		if debug_logging and biome_types.is_empty():
-			print("[VegetationInstancer] Warning: Biome %d has no vegetation rules" % biome_id)
+	if gpu_dispatcher and gpu_dispatcher.has_method("get_transform_buffer_rid") and _terrain_dispatcher:
+		# Process each vegetation type with GPU path
+		var veg_types: Array = rules.get("types", [])
+		for veg_type_data: Dictionary in veg_types:
+			var veg_type: int = veg_type_data.get("type", VegetationManager.VegetationType.BUSH)
+			var variants: Array = veg_type_data.get("variants", ["default"])
+			var density: float = VegetationManager.get_effective_density(biome_id, veg_type_data)
+			
+			if variants.is_empty() or density <= 0.0:
+				continue
+			
+			# Call generate_placements with cpu_fallback=false to populate GPU caches only
+			var grid_spacing: float = _placement_sampler.GRID_SPACING.get(veg_type, 2.0)
+			var noise_freq: float = _placement_sampler.NOISE_FREQUENCY.get(veg_type, 0.1)
+			var slope_max: float = rules.get("slope_max", 30.0)
+			var height_range: Dictionary = rules.get("height_range", {"min": -50, "max": 200})
+			
+			var _result = gpu_dispatcher.generate_placements(
+				chunk_origin,
+				veg_type,
+				density,
+				grid_spacing,
+				noise_freq,
+				slope_max,
+				height_range,
+				_placement_sampler._world_seed,
+				_terrain_dispatcher.get_biome_map_texture()
+			)
+			
+			# Verify GPU readiness
+			if not gpu_dispatcher.has_method("is_gpu_ready") or not gpu_dispatcher.is_gpu_ready(chunk_origin, veg_type):
+				if debug_logging:
+					push_warning("[VegetationInstancer] GPU buffers not ready for chunk %s type %d, falling back to CPU" % [chunk_origin, veg_type])
+				gpu_failed = true
+				break
+			
+			# Get transform buffer from GPU dispatcher
+			var transform_buffer_rid: RID = gpu_dispatcher.get_transform_buffer_rid(chunk_origin, veg_type)
+			var placement_count: int = gpu_dispatcher.get_placement_count(chunk_origin, veg_type)
+			
+			if not transform_buffer_rid.is_valid() or placement_count <= 0:
+				if debug_logging:
+					push_warning("[VegetationInstancer] Invalid GPU buffer for chunk %s type %d (rid_valid=%s, count=%d), falling back to CPU" % [chunk_origin, veg_type, transform_buffer_rid.is_valid(), placement_count])
+				gpu_failed = true
+				break
+			
+			if transform_buffer_rid.is_valid() and placement_count > 0:
+				used_gpu_path = true
+				total_placements += placement_count
+				
+				# Use first variant for GPU path (TODO: support multiple variants)
+				var variant: String = variants[0] if not variants.is_empty() else "default"
+				var type_variants: Dictionary = _multimesh_instances.get(veg_type, {})
+				var mmi: MultiMeshInstance3D = type_variants.get(variant)
+				
+				if mmi and mmi.multimesh:
+					var mm := mmi.multimesh
+					
+					# Set mesh if not already set
+					if mm.mesh == null:
+						var mesh := VegetationManager.get_mesh_for_type(veg_type, biome_id, variant, 0, 0)
+						if mesh:
+							mm.mesh = mesh
+					
+					# Ensure MultiMesh has enough capacity
+					var current_visible := mm.visible_instance_count
+					var required_capacity := current_visible + placement_count
+					if required_capacity > mm.instance_count:
+						mm.instance_count = required_capacity * 2
+					
+					# Interim solution: CPU loop to read transform buffer and populate MultiMesh
+					# This minimizes readback to only transform data (no placement data)
+					var rd := RenderingServer.get_rendering_device()
+					if not rd:
+						push_warning("[VegetationInstancer] RenderingDevice not available for GPU path")
+						gpu_failed = true
+						break
+					
+					var transform_data: PackedByteArray = rd.buffer_get_data(transform_buffer_rid)
+					var float_count := placement_count * 12
+					
+					if transform_data.size() >= float_count * 4:
+							var base_index := current_visible
+							
+							# Track instances for chunk unloading
+							if not _chunk_instance_indices.has(chunk_origin):
+								_chunk_instance_indices[chunk_origin] = []
+							
+							for i in range(placement_count):
+								var offset := i * 12 * 4  # 12 floats * 4 bytes per float
+								
+								# Decode 3x4 transform matrix from buffer
+								var basis_x := Vector3(
+									transform_data.decode_float(offset + 0),
+									transform_data.decode_float(offset + 4),
+									transform_data.decode_float(offset + 8)
+								)
+								var basis_y := Vector3(
+									transform_data.decode_float(offset + 16),
+									transform_data.decode_float(offset + 20),
+									transform_data.decode_float(offset + 24)
+								)
+								var basis_z := Vector3(
+									transform_data.decode_float(offset + 32),
+									transform_data.decode_float(offset + 36),
+									transform_data.decode_float(offset + 40)
+								)
+								var origin := Vector3(
+									transform_data.decode_float(offset + 12),
+									transform_data.decode_float(offset + 28),
+									transform_data.decode_float(offset + 44)
+								)
+								
+								var transform := Transform3D(
+									Basis(basis_x, basis_y, basis_z),
+									origin
+								)
+								
+								mm.set_instance_transform(base_index + i, transform)
+								
+								# Track instance for chunk unloading
+								_chunk_instance_indices[chunk_origin].append({
+									"type": veg_type,
+									"variant": variant,
+									"index": base_index + i
+								})
+								
+								# Register with VegetationManager
+								VegetationManager.register_instance_position(origin, chunk_origin, veg_type, transform)
+							
+							mm.visible_instance_count = base_index + placement_count
+							
+							if debug_logging:
+								print("[VegetationInstancer] GPU path: chunk=%s type=%d variant=%s count=%d" % [chunk_origin, veg_type, variant, placement_count])
+					else:
+						push_warning("[VegetationInstancer] Transform buffer size mismatch: expected %d bytes, got %d" % [float_count * 4, transform_data.size()])
+						gpu_failed = true
+						break
 	
-	# Add instances to MultiMeshes
-	for placement: Dictionary in placements:
-		_add_instance(placement, chunk_origin)
+	# Fall back to CPU path if GPU path not used or failed
+	var placements: Array[Dictionary] = []
+	if not used_gpu_path or gpu_failed:
+		placements = _placement_sampler.sample_chunk(
+			chunk_origin,
+			CHUNK_SIZE,
+			biome_id,
+			_terrain,
+			rules
+		)
+		
+		if _terrain and not _terrain.has_method("get_voxel_tool") and debug_logging:
+			push_warning("[VegetationInstancer] Terrain has no get_voxel_tool; placements may be empty")
+		
+		# If placement yields zero results and terrain might not be ready,
+		# requeue the chunk for a later attempt instead of marking as populated
+		if placements.is_empty():
+			# Check if this could be due to missing surface data
+			# If biome has vegetation types but we got zero placements, terrain may not be ready
+			var biome_types: Array = rules.get("types", [])
+			if not biome_types.is_empty() and not _terrain_ready_chunks.has(chunk_origin):
+				# Terrain not confirmed ready and biome should have vegetation - defer
+				if not chunk_origin in _deferred_chunks:
+					_deferred_chunks.append(chunk_origin)
+				return
+			if debug_logging and biome_types.is_empty():
+				print("[VegetationInstancer] Warning: Biome %d has no vegetation rules" % biome_id)
+		
+		# Add instances to MultiMeshes
+		for placement: Dictionary in placements:
+			_add_instance(placement, chunk_origin)
 	
 	_populated_chunks[chunk_origin] = true
 	_last_chunk_process_time_us = Time.get_ticks_usec() - start_time
 	_total_chunks_processed += 1
 	_total_chunk_time_us += _last_chunk_process_time_us
 	
-	if placements.size() > 0:
-		VegetationManager.vegetation_populated.emit(chunk_origin, placements.size())
+	var final_count := total_placements if used_gpu_path else (placements.size() if placements else 0)
+	if final_count > 0:
+		VegetationManager.vegetation_populated.emit(chunk_origin, final_count)
 		if debug_logging:
-			var counts := _summarize_placements(placements)
-			_debug_last_placements[chunk_origin] = counts
-			print("[VegetationInstancer] Chunk %s populated: %s" % [chunk_origin, str(counts)])
+			if used_gpu_path:
+				print("[VegetationInstancer] Chunk %s populated (GPU): %d instances" % [chunk_origin, final_count])
+			else:
+				var counts := _summarize_placements(placements)
+				_debug_last_placements[chunk_origin] = counts
+				print("[VegetationInstancer] Chunk %s populated: %s" % [chunk_origin, str(counts)])
 
 
 func _summarize_placements(placements: Array) -> Dictionary:
@@ -495,7 +648,7 @@ func get_average_chunk_time_ms() -> float:
 	return float(_total_chunk_time_us) / float(_total_chunks_processed) / 1000.0
 
 
-func get_gpu_dispatcher() -> GPUVegetationDispatcher:
+func get_gpu_dispatcher():
 	if _placement_sampler and _placement_sampler.has_method("get_gpu_dispatcher"):
 		return _placement_sampler.get_gpu_dispatcher()
 	if debug_logging:
@@ -900,13 +1053,22 @@ func _ensure_terrain_dispatcher() -> void:
 		if debug_logging:
 			push_warning("[VegetationInstancer] Generator %s does not support GPU dispatcher" % generator.get_class())
 		return
+	
+	# Comment 2 fix: Wire terrain dispatcher for both native and GDScript dispatchers
 	var dispatcher: BiomeMapGPUDispatcher = generator.get_gpu_dispatcher()
 	if dispatcher:
 		_terrain_dispatcher = dispatcher
 		_placement_sampler.set_terrain_dispatcher(dispatcher)
+		
+		# Also wire the terrain generator directly for native dispatcher
+		var gpu_disp = _placement_sampler._gpu_dispatcher
+		if gpu_disp and gpu_disp.has_method("set_terrain_dispatcher"):
+			gpu_disp.set_terrain_dispatcher(dispatcher)
+		
 		_terrain_dispatcher_wired = true
 		if debug_logging:
-			print("[VegetationInstancer] ✓ GPU dispatcher wired successfully")
+			var disp_type: String = gpu_disp.get_class() if gpu_disp else "unknown"
+			print("[VegetationInstancer] ✓ GPU dispatcher wired successfully (type: %s)" % disp_type)
 	else:
 		if debug_logging:
 			push_warning("[VegetationInstancer] Generator returned null GPU dispatcher")

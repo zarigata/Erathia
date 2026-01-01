@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3 uid="uid://c8qvx7y3m8n5k"]
+
+[ext_resource type="Script" path="res://test_native_call.gd" id="1_test"]
+
+[node name="TestNativeExtension" type="Node"]
+script = ExtResource("1_test")
+
+[node name="NativeTerrainTest" type="NativeTerrainTest" parent="."]
+test_value = 42

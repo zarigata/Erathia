@@ -18,7 +18,7 @@ extends Node3D
 var _terrain: VoxelLodTerrain
 var _map_generator: MapGenerator
 var _biome_generator: BiomeAwareGenerator
-var _gpu_generator: VoxelGeneratorScript
+var _gpu_generator: RefCounted  # NativeTerrainGenerator (native VoxelGenerator subclass)
 var _player: Node3D
 var _loading_screen: CanvasLayer
 var _world_init_manager: Node
@@ -33,7 +33,7 @@ func _validate_gpu_support() -> bool:
 		return false
 	var device_name := rd.get_device_name()
 	print_rich("[color=green][MainTerrainInit] GPU Device: %s[/color]" % device_name)
-	print_rich("[color=cyan][MainTerrainInit] GPU Vendor: %s, API: %s[/color]" % [rd.get_device_vendor_name(), rd.get_device_api_version()])
+	print_rich("[color=cyan][MainTerrainInit] GPU Vendor: %s[/color]" % rd.get_device_vendor_name())
 	# Quick compute capability probe
 	var compute_list := rd.compute_list_begin()
 	if compute_list == 0:
@@ -71,6 +71,33 @@ func _ready() -> void:
 	
 	# Setup terrain connections and start initialization
 	_setup_terrain_and_connections()
+
+
+func _process(delta: float) -> void:
+	if not _gpu_generator:
+		return
+	
+	# COMMENT 4 FIX: Update player position in generator for priority calculation
+	if _player and _gpu_generator.has_method("set_player_position"):
+		_gpu_generator.set_player_position(_player.global_position)
+	
+	# Drive async chunk queue processing
+	if _gpu_generator.has_method("process_chunk_queue"):
+		_gpu_generator.process_chunk_queue(delta)
+	
+	# Optional: Display telemetry (throttled to avoid spam)
+	if _gpu_generator.has_method("get_telemetry"):
+		var stats = _gpu_generator.get_telemetry()
+		# Only print if there's activity
+		if stats.queue_size > 0 or stats.in_flight_chunks > 0:
+			if Engine.get_frames_drawn() % 60 == 0:  # Print once per second at 60 FPS
+				print_rich("[color=cyan][Terrain Async] Queue: %d | In-flight: %d | Cached: %d | GPU: %.2fms/%.2fms[/color]" % [
+					stats.queue_size,
+					stats.in_flight_chunks,
+					stats.cached_chunks,
+					stats.current_frame_gpu_time_ms,
+					stats.frame_budget_ms
+				])
 
 
 ## Delete old world map files to force regeneration with new seed
@@ -118,24 +145,33 @@ func _initialize_generator(seed_manager: Node) -> void:
 	if seed_manager and seed_manager.has_method("get_world_seed"):
 		seed_value = seed_manager.get_world_seed()
 	
-	print_rich("[color=cyan][MainTerrainInit] Attempting GPU terrain generator initialization...[/color]")
-	var gpu_generator := preload("res://_engine/terrain/gpu_terrain_generator.gd").new()
+	print_rich("[color=cyan][MainTerrainInit] Attempting Native C++ GPU terrain generator initialization (direct VoxelGenerator subclass)...[/color]")
+	
+	if not ClassDB.class_exists("NativeTerrainGenerator"):
+		push_error("[MainTerrainInit] NativeTerrainGenerator class not found - extension not loaded")
+		print_rich("[color=yellow][MainTerrainInit] Falling back to CPU BiomeAwareGenerator[/color]")
+		var cpu_generator := preload("res://_engine/terrain/biome_aware_generator.gd").new()
+		if cpu_generator:
+			_biome_generator = cpu_generator
+			if _biome_generator.has_method("update_seed"):
+				_biome_generator.update_seed(seed_value)
+			_terrain.generator = _biome_generator
+			print("[MainTerrainInit] CPU BiomeAwareGenerator assigned")
+		else:
+			push_error("[MainTerrainInit] Failed to instantiate BiomeAwareGenerator fallback")
+		return
+	
+	var gpu_generator = NativeTerrainGenerator.new()
 	if gpu_generator and gpu_generator.is_gpu_available():
 		_gpu_generator = gpu_generator
-		if _gpu_generator.has_method("update_seed"):
-			_gpu_generator.update_seed(seed_value)
+		_gpu_generator.set_world_seed(seed_value)
 		_terrain.generator = _gpu_generator
-		print_rich("[color=green][MainTerrainInit] GPU terrain generator initialized successfully[/color]")
+		print_rich("[color=green][MainTerrainInit] Native GPU terrain generator initialized successfully (zero-overhead native VoxelGenerator)[/color]")
+		print_rich("[color=cyan][MainTerrainInit] GPU Status: %s[/color]" % _gpu_generator.get_gpu_status())
 	else:
-		push_warning("[MainTerrainInit] GPU compute unavailable; falling back to CPU BiomeAwareGenerator")
-		if gpu_generator and gpu_generator.has_method("get_gpu_dispatcher"):
-			var dispatcher: Object = gpu_generator.get_gpu_dispatcher()
-			if dispatcher == null:
-				print_rich("[color=yellow][MainTerrainInit] GPU dispatcher not ready[/color]")
-			elif dispatcher.has_method("is_ready") and not dispatcher.is_ready():
-				print_rich("[color=yellow][MainTerrainInit] GPU dispatcher failed initialization (shader/pipeline issue)[/color]")
-		if gpu_generator and gpu_generator.has_method("has_biome_texture") and not gpu_generator.has_biome_texture():
-			print_rich("[color=yellow][MainTerrainInit] Biome map texture not loaded[/color]")
+		push_warning("[MainTerrainInit] Native GPU compute unavailable; falling back to CPU BiomeAwareGenerator")
+		if gpu_generator:
+			print_rich("[color=yellow][MainTerrainInit] GPU Status: %s[/color]" % gpu_generator.get_gpu_status())
 		print_rich("[color=yellow][MainTerrainInit] Falling back to CPU BiomeAwareGenerator[/color]")
 		var cpu_generator := preload("res://_engine/terrain/biome_aware_generator.gd").new()
 		if cpu_generator:
@@ -152,10 +188,10 @@ func _initialize_generator(seed_manager: Node) -> void:
 	if _gpu_generator:
 		var biome_map_gen := get_node_or_null("BiomeMapGeneratorGPU")
 		if biome_map_gen and biome_map_gen.has_signal("map_generated"):
-			var update_callable := Callable(_gpu_generator, "update_biome_texture")
+			var update_callable := Callable(_gpu_generator, "set_biome_map_texture")
 			if not biome_map_gen.is_connected("map_generated", update_callable):
 				biome_map_gen.map_generated.connect(update_callable)
-				print("[MainTerrainInit] Connected BiomeMapGeneratorGPU to GPU terrain wrapper")
+				print("[MainTerrainInit] Connected BiomeMapGeneratorGPU to Native GPU terrain generator")
 			# Ensure the GPU biome map is produced before terrain generation
 			if biome_map_gen.has_method("generate_map"):
 				biome_map_gen.call_deferred("generate_map", seed_value)
@@ -273,8 +309,8 @@ func _on_seed_randomized(new_seed: int) -> void:
 	print("[MainTerrainInit] Seed randomized to: %d" % new_seed)
 	
 	# Update generator seed
-	if _gpu_generator and _gpu_generator.has_method("update_seed"):
-		_gpu_generator.update_seed(new_seed)
+	if _gpu_generator:
+		_gpu_generator.set_world_seed(new_seed)
 	elif _biome_generator:
 		_biome_generator.update_seed(new_seed)
 	
@@ -287,8 +323,8 @@ func _on_seed_randomized(new_seed: int) -> void:
 func _on_world_seed_changed(new_seed: int) -> void:
 	print("[MainTerrainInit] WorldSeedManager seed changed to: %d" % new_seed)
 	# MapGenerator will handle regeneration via its own connection
-	if _gpu_generator and _gpu_generator.has_method("update_seed"):
-		_gpu_generator.update_seed(new_seed)
+	if _gpu_generator:
+		_gpu_generator.set_world_seed(new_seed)
 
 
 ## Force terrain to completely regenerate by clearing its internal state
@@ -324,12 +360,10 @@ func get_gpu_info() -> Dictionary:
 	var rd := RenderingServer.get_rendering_device()
 	var device_name := ""
 	var vendor := ""
-	var api_version := ""
 	var compute_available := false
 	if rd:
 		device_name = rd.get_device_name()
 		vendor = rd.get_device_vendor_name()
-		api_version = rd.get_device_api_version()
 		var compute_list := rd.compute_list_begin()
 		if compute_list != 0:
 			compute_available = true
@@ -339,13 +373,12 @@ func get_gpu_info() -> Dictionary:
 	if _gpu_generator:
 		generator_type = "GPU"
 		if _gpu_generator.has_method("get_gpu_dispatcher"):
-			var dispatcher := _gpu_generator.get_gpu_dispatcher()
+			var dispatcher = _gpu_generator.get_gpu_dispatcher()
 			if dispatcher and dispatcher.has_method("is_ready"):
 				dispatcher_ready = dispatcher.is_ready()
 	return {
 		"device_name": device_name,
 		"vendor": vendor,
-		"api_version": api_version,
 		"compute_available": compute_available,
 		"generator_type": generator_type,
 		"dispatcher_ready": dispatcher_ready

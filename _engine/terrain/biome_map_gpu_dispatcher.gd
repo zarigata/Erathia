@@ -5,7 +5,7 @@ var _rd: RenderingDevice
 var _shader: RID
 var _pipeline: RID
 var _biome_map_texture: RID
-var _sdf_cache: Dictionary = {}  # Vector3i -> {sdf: RID, material: RID}
+var _sdf_cache: Dictionary = {}  # Vector3i -> {sdf: RID, material: RID, fence: RID, gpu_complete: bool}
 var _mutex: Mutex = Mutex.new()
 var _last_compute_time_us: int = 0
 var _total_compute_time_us: int = 0
@@ -143,19 +143,28 @@ func generate_chunk_sdf(chunk_origin: Vector3i, world_seed: int) -> Dictionary:
 	_rd.compute_list_end()
 	_rd.submit()
 	_rd.sync()
+	
 	var end_time := Time.get_ticks_usec()
 	_last_compute_time_us = end_time - start_time
 	_total_compute_time_us += _last_compute_time_us
 	_compute_call_count += 1
 	
-	_sdf_cache[chunk_origin] = {"sdf": sdf_texture, "material": material_texture}
+	# Store chunk in cache as complete
+	_sdf_cache[chunk_origin] = {
+		"sdf": sdf_texture,
+		"material": material_texture,
+		"gpu_complete": true
+	}
 	_mutex.unlock()
 	
 	return _sdf_cache[chunk_origin]
 
 
 func is_chunk_ready(chunk_origin: Vector3i) -> bool:
-	return _sdf_cache.has(chunk_origin)
+	_mutex.lock()
+	var ready: bool = _sdf_cache.has(chunk_origin) and _sdf_cache[chunk_origin].get("gpu_complete", false)
+	_mutex.unlock()
+	return ready
 
 
 func get_biome_map_texture() -> RID:
@@ -164,7 +173,13 @@ func get_biome_map_texture() -> RID:
 
 
 func get_sdf_texture_for_chunk(chunk_origin: Vector3i) -> RID:
-	"""Return cached SDF texture RID for the given chunk, or invalid RID if missing."""
+	"""
+	COMMENT 5 FIX: GPU mesher interface - non-blocking GPU texture path
+	Return cached SDF texture RID for the given chunk, or invalid RID if missing.
+	This allows meshers to sample GPU textures directly without CPU readback.
+	Use this in conjunction with get_chunk_gpu_textures() from NativeTerrainGenerator
+	to implement a fully GPU-resident meshing pipeline.
+	"""
 	_mutex.lock()
 	if _sdf_cache.has(chunk_origin):
 		var entry: Dictionary = _sdf_cache[chunk_origin]
@@ -176,14 +191,31 @@ func get_sdf_texture_for_chunk(chunk_origin: Vector3i) -> RID:
 
 
 func write_to_voxel_buffer(chunk_origin: Vector3i, out_buffer: VoxelBuffer) -> bool:
-	if not _rd or not _sdf_cache.has(chunk_origin):
+	# COMMENT 4 FIX: Only perform CPU readback if chunk is GPU-complete
+	if not _rd:
 		return false
+	
+	# Ensure chunk is ready before attempting readback
+	if not is_chunk_ready(chunk_origin):
+		return false
+	
+	_mutex.lock()
+	if not _sdf_cache.has(chunk_origin):
+		_mutex.unlock()
+		return false
+	
 	var textures: Dictionary = _sdf_cache[chunk_origin]
 	if not textures.has("sdf") or not textures.has("material"):
+		_mutex.unlock()
 		return false
+	
+	var sdf_rid: RID = textures["sdf"]
+	var mat_rid: RID = textures["material"]
+	_mutex.unlock()
 
-	var sdf_data := _rd.texture_get_data(textures.sdf, 0)
-	var mat_data := _rd.texture_get_data(textures.material, 0)
+	# CPU readback (only after GPU completion)
+	var sdf_data := _rd.texture_get_data(sdf_rid, 0)
+	var mat_data := _rd.texture_get_data(mat_rid, 0)
 	if sdf_data.is_empty() or mat_data.is_empty():
 		return false
 
@@ -202,6 +234,11 @@ func clear_cache() -> void:
 	_mutex.lock()
 	for entry in _sdf_cache.values():
 		if entry is Dictionary:
+			# COMMENT 4 FIX: Free fences before clearing cache
+			if entry.has("fence"):
+				var fence: RID = entry["fence"]
+				if fence.is_valid():
+					_rd.free_rid(fence)
 			if entry.has("sdf"):
 				_rd.free_rid(entry.sdf)
 			if entry.has("material"):

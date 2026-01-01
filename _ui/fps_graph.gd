@@ -135,14 +135,14 @@ func _draw_frame_breakdown() -> void:
 	var y_offset := rect.size.y - breakdown_height - 5.0
 	
 	var workload := _breakdown_data
-	var cpu_pct := workload.get("cpu", 0.33)
-	var compute_pct := workload.get("gpu_compute", 0.33)
-	var render_pct := workload.get("gpu_render", 0.34)
+	var cpu_pct: float = workload.get("cpu", 0.33)
+	var compute_pct: float = workload.get("gpu_compute", 0.33)
+	var render_pct: float = workload.get("gpu_render", 0.34)
 	
 	var width := rect.size.x
-	var cpu_width := width * cpu_pct
-	var compute_width := width * compute_pct
-	var render_width := width * render_pct
+	var cpu_width: float = width * cpu_pct
+	var compute_width: float = width * compute_pct
+	var render_width: float = width * render_pct
 	
 	draw_rect(Rect2(0, y_offset, cpu_width, breakdown_height), Color(0.8, 0.3, 0.3, 0.8))
 	draw_rect(Rect2(cpu_width, y_offset, compute_width, breakdown_height), Color(0.3, 0.8, 0.3, 0.8))

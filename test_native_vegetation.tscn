@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cqx8y7m5n3vwb"]
+
+[ext_resource type="Script" path="res://test_native_vegetation.gd" id="1_test"]
+
+[node name="TestNativeVegetation" type="Node"]
+script = ExtResource("1_test")
